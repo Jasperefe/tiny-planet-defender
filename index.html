@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<link rel="icon" href="data:,">
+<title>Tiny Planet Defender</title>
+<script>window.PLATFORM = "local";</script>
+<script>window.PLATFORM = window.PLATFORM || 'local';</script>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<!-- Loading screen (shown until the game is ready) -->
+<div id="loading" class="screen show">
+  <div class="logo"><span>TINY PLANET</span><b>DEFENDER</b></div>
+  <div class="bar"><i id="loadBar"></i></div>
+</div>
+
+<!-- HUD -->
+<div id="hud" class="hidden">
+  <div class="hud-left">
+    <div class="wave-label">WAVE <span id="waveNum">1</span></div>
+    <div class="mini-bar"><i id="waveBar"></i></div>
+  </div>
+  <div class="hud-center">
+    <div class="hp-wrap"><div class="hp-bar"><i id="hpBar"></i><em id="shieldBar"></em></div><span id="hpText">10 / 10</span></div>
+    <div id="bossWrap" class="boss-wrap hidden"><div class="boss-name">TITAN ROCK</div><div class="boss-bar"><i id="bossBar"></i></div></div>
+  </div>
+  <div class="hud-right">
+    <div class="crystals"><span class="gem"></span><span id="crystalNum">0</span></div>
+    <button id="pauseBtn" class="icon-btn" aria-label="Pause"><span class="pause-icon"></span></button>
+  </div>
+</div>
+
+<div id="hint" class="hint hidden">Drag to aim &middot; Auto-fire is on<br><small>Desktop: mouse or A / D keys</small></div>
+<div id="banner" class="banner"></div>
+
+<!-- Upgrade shop -->
+<div id="shop" class="screen">
+  <div class="panel wide">
+    <div class="panel-title">WAVE <span id="shopWave">1</span> CLEARED</div>
+    <div class="shop-sub"><span class="gem"></span><span id="shopCrystals">0</span> crystals</div>
+    <div id="cards" class="cards"></div>
+    <div class="row">
+      <button id="bonusBtn" class="btn ghost hidden"><span class="ad-tag">AD</span> +50% crystals</button>
+      <button id="nextBtn" class="btn primary">NEXT WAVE &#9654;</button>
+    </div>
+  </div>
+</div>
+
+<!-- Pause -->
+<div id="pause" class="screen">
+  <div class="panel">
+    <div class="panel-title">PAUSED</div>
+    <button id="resumeBtn" class="btn primary">RESUME</button>
+    <div class="toggles">
+      <button id="sfxBtn" class="btn ghost">SOUND: ON</button>
+      <button id="musicBtn" class="btn ghost">MUSIC: ON</button>
+    </div>
+    <button id="creditsBtn" class="btn ghost">CREDITS</button>
+    <button id="quitBtn" class="btn ghost danger">RESTART RUN</button>
+  </div>
+</div>
+
+<!-- Game over -->
+<div id="over" class="screen">
+  <div class="panel">
+    <div class="panel-title red">PLANET LOST</div>
+    <div class="stats">
+      <div><small>WAVE REACHED</small><b id="overWave">1</b></div>
+      <div><small>BEST</small><b id="overBest">1</b></div>
+      <div><small>METEORS</small><b id="overKills">0</b></div>
+    </div>
+    <div id="newBest" class="new-best hidden">NEW BEST!</div>
+    <button id="reviveBtn" class="btn primary hidden"><span class="ad-tag">AD</span> REVIVE</button>
+    <button id="againBtn" class="btn primary">PLAY AGAIN</button>
+    <button id="overCreditsBtn" class="btn ghost small">CREDITS</button>
+  </div>
+</div>
+
+<!-- Credits -->
+<div id="credits" class="screen">
+  <div class="panel">
+    <div class="panel-title">CREDITS</div>
+    <div class="credits-list">
+      <p><b>Game design &amp; code</b><br>Tolex</p>
+      <p><b>3D models: Space Kit</b><br>Kenney &middot; www.kenney.nl &middot; CC0</p>
+      <p><b>3D models: Ultimate Space Kit</b><br>Quaternius &middot; quaternius.com &middot; CC0</p>
+      <p><b>Sound effects: Sci-Fi Sounds, Interface Sounds</b><br>Kenney &middot; www.kenney.nl &middot; CC0</p>
+      <p><b>Music: "Title Screen"</b><br>Irrational Machines &middot; RPG Title Screen Music Pack (Music Weeklies) &middot; CC-BY 4.0</p>
+      <p><b>Music: Space Themes</b><br>Not Jam &middot; Space Generator &middot; CC0</p>
+      <p><b>Backgrounds</b><br>"Space Backgrounds" &middot; OpenGameArt.org &middot; CC0<br>Seamless Space Backgrounds &middot; Screaming Brain Studios &middot; CC0</p>
+      <p><b>Engine</b><br>three.js &middot; MIT License</p>
+    </div>
+    <button id="closeCreditsBtn" class="btn primary">BACK</button>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "./lib/three/three.module.js", "three/addons/": "./lib/three/addons/" } }
+</script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+TINY PLANET DEFENDER - CREDITS
+==============================
+
+Game design & code
+  Tolex
+
+3D MODELS
+  Space Kit (turrets, meteor)
+    Kenney - www.kenney.nl
+    License: CC0 1.0 (public domain)
+
+  Ultimate Space Kit (planets, rocks)
+    Quaternius - quaternius.com
+    License: CC0 1.0 (public domain)
+
+SOUND EFFECTS
+  Sci-Fi Sounds, Interface Sounds
+    Kenney - www.kenney.nl
+    License: CC0 1.0 (public domain)
+
+MUSIC
+  "Title Screen"
+    Irrational Machines
+    From: RPG Title Screen Music Pack (Music Weeklies)
+    Source: https://opengameart.org/content/rpg-title-screen-music-pack
+    License: CC-BY 4.0 (https://creativecommons.org/licenses/by/4.0/)
+    Changes: converted from WAV to MP3.
+    ** Attribution is REQUIRED - keep this credit in the game. **
+
+  Space Theme 01 & 02
+    Not Jam - Space Generator (https://not-jam.itch.io/space-generator)
+    License: CC0 (public domain)
+
+BACKGROUNDS
+  "Space Backgrounds" (Background-1)
+    OpenGameArt.org - https://opengameart.org/node/21833
+    License: CC0 (public domain)
+
+  Seamless Space Backgrounds
+    Screaming Brain Studios
+    License: CC0 (public domain)
+
+ENGINE
+  three.js - https://threejs.org
+  License: MIT (Copyright 2010-2026 three.js authors)
