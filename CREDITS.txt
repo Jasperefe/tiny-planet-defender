@@ -2,7 +2,7 @@ TINY PLANET DEFENDER - CREDITS
 ==============================
 
 Game design & code
-  Tolex
+  Esire Omoefe
 
 3D MODELS
   Space Kit (turrets, meteor)

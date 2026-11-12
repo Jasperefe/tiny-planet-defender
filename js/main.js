@@ -76,13 +76,13 @@ let shopBonusUsed = false;
 
 const lvl = (id) => run.levels[id] || 0;
 const stats = () => ({
-  fireRate: 3 * Math.pow(1.25, lvl('rate')),
+  fireRate: 4 * Math.pow(1.22, lvl('rate')),
   damage: 1 + lvl('damage'),
   twin: lvl('twin') > 0,
   spread: lvl('spread'),
-  magnet: 1.5 + 0.55 * lvl('magnet'),
+  magnet: 2.0 + 0.55 * lvl('magnet'),
   shieldMax: lvl('shield'),
-  maxHp: 10 + 3 * lvl('hull'),
+  maxHp: 15 + 3 * lvl('hull'),
 });
 
 // ============================================================ Renderer & scene
@@ -588,8 +588,8 @@ function fireBullet(x, y, angle, damage) {
   }
   b.mesh.position.set(x, y, 0);
   b.mesh.rotation.set(0, 0, angle);
-  b.vx = Math.cos(angle) * 24;
-  b.vy = Math.sin(angle) * 24;
+  b.vx = Math.cos(angle) * BULLET_SPEED;
+  b.vy = Math.sin(angle) * BULLET_SPEED;
   b.life = 1.2;
   b.damage = damage;
   world.add(b.mesh);
@@ -620,18 +620,18 @@ function dropCrystals(pos, count) {
 }
 
 const METEOR_TYPES = {
-  rock:   { models: ['rock_a', 'rock_b', 'rock_c'], hp: 2,  speed: [1.5, 2.1], size: [0.9, 1.25], dmg: 1, reward: 2 },
-  fast:   { models: ['rock_c'],                    hp: 1,  speed: [3.5, 4.1], size: [0.6, 0.7],   dmg: 1, reward: 2 },
-  split:  { models: ['meteor_split'],              hp: 3,  speed: [1.3, 1.6], size: [1.2, 1.35],  dmg: 2, reward: 3 },
-  shard:  { models: ['rock_a', 'rock_b'],          hp: 1,  speed: [2.3, 2.8], size: [0.5, 0.6],   dmg: 1, reward: 1 },
-  armor:  { models: ['rock_large'],                hp: 7,  speed: [1.0, 1.2], size: [1.2, 1.35],  dmg: 2, reward: 5 },
-  boss:   { models: ['rock_large'],                hp: 55, speed: [0.5, 0.55], size: [2.6, 2.6],  dmg: 5, reward: 30 },
+  rock:   { models: ['rock_a', 'rock_b', 'rock_c'], hp: 1,  speed: [1.0, 1.4], size: [0.9, 1.25], dmg: 1, reward: 2 },
+  fast:   { models: ['rock_c'],                    hp: 1,  speed: [2.6, 3.0], size: [0.6, 0.7],   dmg: 1, reward: 2 },
+  split:  { models: ['meteor_split'],              hp: 3,  speed: [0.9, 1.15], size: [1.2, 1.35],  dmg: 2, reward: 3 },
+  shard:  { models: ['rock_a', 'rock_b'],          hp: 1,  speed: [1.6, 2.0], size: [0.5, 0.6],   dmg: 1, reward: 1 },
+  armor:  { models: ['rock_large'],                hp: 6,  speed: [0.75, 0.9], size: [1.2, 1.35],  dmg: 2, reward: 5 },
+  boss:   { models: ['rock_large'],                hp: 40, speed: [0.4, 0.45], size: [2.6, 2.6],  dmg: 5, reward: 30 },
 };
 
 function spawnMeteor(type, from = null) {
   const def = METEOR_TYPES[type];
   const w = run.wave;
-  const hpScale = 1 + (w - 1) * 0.18;
+  const hpScale = 1 + (w - 1) * 0.12;
   const size = rand(def.size[0], def.size[1]);
   const { obj, mats } = instance(pick(def.models), size, true);
 
@@ -656,7 +656,7 @@ function spawnMeteor(type, from = null) {
   }
   const target = new THREE.Vector2(rand(-1.2, 1.2), rand(-1.2, 1.2));
   const dir = new THREE.Vector2(target.x - x, target.y - y).normalize();
-  const speed = rand(def.speed[0], def.speed[1]) * (type === 'boss' ? 1 : 1 + w * 0.025);
+  const speed = rand(def.speed[0], def.speed[1]) * (type === 'boss' ? 1 : 1 + w * 0.015);
   obj.position.set(x, y, 0);
   obj.rotation.set(rand(0, TAU), rand(0, TAU), rand(0, TAU));
   world.add(obj);
@@ -707,13 +707,13 @@ function killMeteor(i) {
 // ============================================================ Waves
 function buildWave(n) {
   const q = [];
-  const total = 6 + Math.floor(n * 2.2);
+  const total = 5 + Math.floor(n * 1.6);
   const isBoss = n % 5 === 0;
   for (let i = 0; i < total; i++) {
     const r = Math.random();
-    const pFast = n >= 3 ? Math.min(0.28, 0.08 + n * 0.015) : 0;
-    const pSplit = n >= 4 ? Math.min(0.22, 0.05 + n * 0.012) : 0;
-    const pArmor = n >= 6 ? Math.min(0.2, 0.03 + n * 0.009) : 0;
+    const pFast = n >= 4 ? Math.min(0.25, 0.06 + n * 0.012) : 0;
+    const pSplit = n >= 5 ? Math.min(0.2, 0.04 + n * 0.01) : 0;
+    const pArmor = n >= 7 ? Math.min(0.18, 0.03 + n * 0.008) : 0;
     if (r < pFast) q.push('fast');
     else if (r < pFast + pSplit) q.push('split');
     else if (r < pFast + pSplit + pArmor) q.push('armor');
@@ -729,7 +729,7 @@ function startWave(n) {
   run.waveTotal = spawnQueue.length;
   run.waveKills = 0;
   run.waveCrystals = 0;
-  spawnInterval = Math.max(0.32, 1.45 - n * 0.06);
+  spawnInterval = Math.max(0.45, 1.9 - n * 0.06);
   spawnTimer = 1.2;
   waveClearTimer = -1;
   run.shield = stats().shieldMax;
@@ -754,11 +754,33 @@ function getTurretTip(out) {
   return turretMount.localToWorld(out.set(TURRET_TIP, 0, 0));
 }
 
+const BULLET_SPEED = 28;
+const ASSIST_CONE = 0.45; // radians (~25 degrees) either side of where you aim
+
+// Aim assist: find the meteor nearest to the aim direction and lead the shot onto it.
+function assistedAngle(tip) {
+  let best = null;
+  let bestScore = Infinity;
+  for (const m of meteors) {
+    const p = m.obj.position;
+    const ang = Math.atan2(p.y - tip.y, p.x - tip.x);
+    const diff = Math.abs(angleDiff(turretAngle, ang));
+    if (diff > ASSIST_CONE) continue;
+    const dist = Math.hypot(p.x - tip.x, p.y - tip.y);
+    const score = diff * 6 + dist * 0.15; // prefer what you aim at, then what is closest
+    if (score < bestScore) { bestScore = score; best = m; }
+  }
+  if (!best) return turretAngle;
+  const p = best.obj.position;
+  const t = Math.hypot(p.x - tip.x, p.y - tip.y) / BULLET_SPEED;
+  return Math.atan2(p.y + best.vy * t - tip.y, p.x + best.vx * t - tip.x);
+}
+
 function update(dt) {
   const s = stats();
 
   // Turret rotation
-  const turnSpeed = 7.5;
+  const turnSpeed = 10;
   if (keys.left) aimAngle += 3.2 * dt;
   if (keys.right) aimAngle -= 3.2 * dt;
   const diff = angleDiff(turretAngle, aimAngle);
@@ -772,7 +794,7 @@ function update(dt) {
       fireCooldown += 1 / s.fireRate;
       if (fireCooldown < -0.1) fireCooldown = 0;
       const tip = getTurretTip(tmpV);
-      const a = turretAngle;
+      const a = assistedAngle(tip);
       const px = -Math.sin(a), py = Math.cos(a);
       if (s.twin) {
         fireBullet(tip.x + px * 0.17, tip.y + py * 0.17, a, s.damage);
@@ -795,7 +817,7 @@ function update(dt) {
     if (spawnTimer <= 0) {
       spawnTimer = spawnInterval * rand(0.7, 1.3);
       spawnMeteor(spawnQueue.shift());
-      if (run.wave >= 8 && Math.random() < 0.25 && spawnQueue.length) spawnMeteor(spawnQueue.shift());
+      if (run.wave >= 10 && Math.random() < 0.2 && spawnQueue.length) spawnMeteor(spawnQueue.shift());
     }
   }
 
@@ -810,7 +832,7 @@ function update(dt) {
       const m = meteors[j];
       const dx = m.obj.position.x - b.mesh.position.x;
       const dy = m.obj.position.y - b.mesh.position.y;
-      const r = m.radius + 0.14;
+      const r = m.radius + 0.3;
       if (dx * dx + dy * dy < r * r) {
         hit = true;
         m.hp -= b.damage;
