@@ -17,7 +17,7 @@ jobs:
       - name: Stop if assets were already fetched
         id: check
         run: |
-          if git ls-remote --exit-code origin refs/heads/monster-assets > /dev/null; then
+          if git ls-remote --exit-code origin refs/heads/monsters-gltf > /dev/null; then
             echo "done=true" >> "$GITHUB_OUTPUT"; echo "Already fetched."
           else
             echo "done=false" >> "$GITHUB_OUTPUT"
@@ -44,15 +44,15 @@ jobs:
           open("ok_count", "w").write(str(ok))
           sys.exit(0 if ok == len(want) and ok > 0 else 1)
           PY
-      - name: Save to branch monster-assets
+      - name: Save to branch monsters-gltf
         if: steps.check.outputs.done == 'false'
         run: |
           mkdir -p monsters && cp -r raw/* monsters/
           find monsters -type f > monsters/FILELIST.txt
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git checkout --orphan monster-assets
+          git checkout --orphan monsters-gltf
           git rm -rf --cached . > /dev/null
           git add monsters
           git commit -m "Monster glTF assets from Quaternius Ultimate Monsters (CC0)"
-          git push -f origin monster-assets
+          git push -f origin monsters-gltf
