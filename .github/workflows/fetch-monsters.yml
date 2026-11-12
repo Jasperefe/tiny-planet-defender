@@ -1,0 +1,35 @@
+name: Fetch monster assets
+on:
+  push:
+    branches: [fetch-assets]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download public Google Drive folder (Quaternius Ultimate Monsters, CC0)
+        run: |
+          pip install --quiet gdown
+          gdown --folder "https://drive.google.com/drive/folders/18m4KpzpEzhC9wl7jzr6dUc0N8Jozr79C" -O raw --remaining-ok || echo "gdown exited with an error"
+          echo "---- downloaded files ----"
+          find raw -type f | head -400
+      - name: Keep glTF, textures and license only
+        run: |
+          mkdir -p monsters
+          cd raw
+          find . -type f \( -iname '*.gltf' -o -iname '*.glb' -o -iname '*.bin' -o -iname '*.png' -o -iname '*.jpg' -o -iname '*.txt' \) -exec cp --parents {} ../monsters/ \;
+          cd ..
+          find monsters -type f > monsters/FILELIST.txt
+          du -sh monsters
+      - name: Save to branch monster-assets
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git checkout --orphan monster-assets
+          git rm -rf --cached . > /dev/null
+          git add monsters
+          git commit -m "Monster assets from Quaternius Ultimate Monsters (CC0)"
+          git push -f origin monster-assets
