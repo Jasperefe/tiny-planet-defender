@@ -13,7 +13,7 @@ jobs:
       - name: Download public Google Drive folder (Quaternius Ultimate Monsters, CC0)
         run: |
           pip install --quiet gdown
-          gdown --folder "https://drive.google.com/drive/folders/18m4KpzpEzhC9wl7jzr6dUc0N8Jozr79C" -O raw --remaining-ok || echo "gdown exited with an error"
+          gdown --folder "https://drive.google.com/drive/folders/18m4KpzpEzhC9wl7jzr6dUc0N8Jozr79C" -O raw || echo "gdown exited with an error"
           echo "---- downloaded files ----"
           find raw -type f | head -400
       - name: Keep glTF, textures and license only
