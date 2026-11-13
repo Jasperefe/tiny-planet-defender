@@ -9,7 +9,7 @@ import { platform, hooks } from './platform.js';
 import { AudioManager } from './audio.js';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
-  buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected,
+  buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
 } from './data.js';
 
 // ============================================================ Helpers
@@ -1000,6 +1000,11 @@ canvas.addEventListener('pointerdown', (e) => {
   const u = pickUnit(e);
   if (!u) return;
   drag = { unit: u, start: u.group.position.clone(), moved: false, pointerId: e.pointerId };
+  const bin = $('sellBin');
+  $('sellValue').textContent = formatNum(sellValue(u.type, u.tier, save.buys[u.type]));
+  bin.classList.toggle('locked', playerUnits().filter((o) => o.alive).length <= 1);
+  bin.classList.remove('hidden', 'hot');
+  $('bottom').classList.add('hidden');
   canvas.setPointerCapture(e.pointerId);
   u.play('move');
   tween(0.12, (k) => u.group.scale.setScalar(1 + 0.15 * k));
@@ -1009,6 +1014,7 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 canvas.addEventListener('pointermove', (e) => {
   if (!drag) return;
+  $('sellBin').classList.toggle('hot', overBin(e));
   if (!groundPoint(e, tmp)) return;
   const u = drag.unit;
   tmp.z += 0.6; // keep the monster visible above the finger
@@ -1025,6 +1031,13 @@ function endDrag(e) {
   drag = null;
   for (const o of playerUnits()) o.mergeGlow = false;
   setHighlight(null);
+  const droppedOnBin = overBin(e);
+  $('sellBin').classList.add('hidden');
+  if (state === 'prep') $('bottom').classList.remove('hidden');
+  if (droppedOnBin) {
+    if (playerUnits().filter((o) => o.alive).length <= 1) { audio.play('denied'); showBanner('KEEP AT LEAST ONE!', 'red'); }
+    else { try { canvas.releasePointerCapture(e.pointerId); } catch {} sellUnit(u); return; }
+  }
   try { canvas.releasePointerCapture(e.pointerId); } catch {}
   u.play('idle');
   const c = posToCell(u.group.position);
@@ -1053,6 +1066,28 @@ function endDrag(e) {
 }
 canvas.addEventListener('pointerup', endDrag);
 canvas.addEventListener('pointercancel', endDrag);
+
+function overBin(e) {
+  const r = $('sellBin').getBoundingClientRect();
+  const pad = 30;
+  return e.clientX > r.left - pad && e.clientX < r.right + pad && e.clientY > r.top - pad && e.clientY < r.bottom + pad;
+}
+
+// Sell a monster for coins to free its square
+function sellUnit(u) {
+  const value = sellValue(u.type, u.tier, save.buys[u.type]);
+  u.alive = false;
+  const p = u.group.position.clone();
+  audio.play('coins2', { volume: 0.8 });
+  smoke(p.clone().setY(0.6), 12);
+  burst(p.clone().setY(1), C.gold, 18, 4, 0.5, 0.5, 3);
+  const s0 = u.group.scale.x;
+  tween(0.25, (k) => u.group.scale.setScalar(s0 * (1 - k)), () => removeUnit(u));
+  flyCoins(p.clone().setY(1), Math.min(8, 2 + u.tier));
+  floatText(p.clone().setY(2), '+' + formatNum(value), 'crit');
+  save.coins += value;
+  setTimeout(() => { updateShopUI(); updatePower(); persist(); }, 300);
+}
 
 // ============================================================ Battle
 function startBattle() {
@@ -1710,7 +1745,7 @@ if (platform.name === 'local') {
       showScreen('win', false); showScreen('lose', false);
       return { level, count, won: en === 0 && pl > 0, time: t, playerLeft: pl, enemyLeft: en, you: armyPower(board.map((b) => ({ stats: unitStats(b.type, b.tier) }))), foe: armyPower(enemyUnits()) };
     },
-    camera, scene, expected,
+    camera, scene, expected, screenOf(u) { const v = u.group.position.clone().setY(u.height * 0.5); v.project(camera); return [(v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight]; },
   };
 }
 

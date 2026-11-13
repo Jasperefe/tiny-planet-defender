@@ -96,7 +96,7 @@ export const START_COINS = 30;
 export const expected = [];
 (function simulate() {
   let bal = START_COINS, nm = 0, nr = 0, units = 2;
-  for (let L = 1; L <= 120; L++) {
+  for (let L = 1; L <= 1001; L++) {
     expected[L] = units; // army before fighting level L
     bal += winCoins(L);
     for (;;) {
@@ -131,7 +131,7 @@ export function buildLevel(level) {
   const r = rng(level * 7 + 3);
   const isBoss = level % 10 === 0;
   // Army before this level, plus what the player could buy with the previous win
-  let budget = Math.max(2, Math.round(expected[Math.min(level + 1, 120)] * difficulty(level)));
+  let budget = Math.max(2, Math.round(expected[Math.min(level + 1, 1001)] * difficulty(level)));
   if (level === 1) budget = 2;
   if (level === 2) budget = 4;
   const units = [];
@@ -194,4 +194,9 @@ export function bossStats(budget) {
   // Merging power grows faster than linear; give the boss lots of HP and a slam
   const k = Math.pow(budget, 1.08);
   return { hp: Math.round(base.hp * k * 1.15), dmg: Math.round(base.dmg * k * 0.5), interval: 1.6, range: 2.6, speed: 2.0, splash: 2.6 };
+}
+
+// Coins you get back when selling a monster: 40% of what its tier-1 parts would cost now
+export function sellValue(type, tier, buys) {
+  return Math.max(2, Math.round(buyPrice(Math.max(0, buys - 1)) * Math.pow(2, tier - 1) * 0.4));
 }
