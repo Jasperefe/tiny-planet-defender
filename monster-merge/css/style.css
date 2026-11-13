@@ -267,3 +267,8 @@ html, body {
 
 .btn.red { background: linear-gradient(#ff8a8a, #e0344a); box-shadow: 0 6px 0 var(--red-dark); }
 .btn.ghost.danger { color: #e0344a; border-color: #f3c0c0; box-shadow: 0 4px 0 #e9a3a3; }
+
+/* Trailer capture mode */
+.capture #hint, .capture #freeBtn { display: none !important; }
+.demo-hand { position: fixed; left: 0; top: 0; z-index: 50; font-size: 64px; pointer-events: none; margin: -6px 0 0 -18px; filter: drop-shadow(0 4px 4px rgba(0,0,0,.4)); }
+.clean #top, .clean #bottom, .clean #powerBar, .clean #fx, .clean .banner, .clean .screen, .clean .boss-name, .clean .demo-hand { visibility: hidden !important; }

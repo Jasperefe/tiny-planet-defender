@@ -5,12 +5,12 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { platform, hooks } from './platform.js?v=20261113101248';
-import { AudioManager } from './audio.js?v=20261113101248';
+import { platform, hooks } from './platform.js?v=20261113110444';
+import { AudioManager } from './audio.js?v=20261113110444';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
   buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
-} from './data.js?v=20261113101248';
+} from './data.js?v=20261113110444';
 
 // ============================================================ Helpers
 const $ = (id) => document.getElementById(id);
@@ -58,6 +58,10 @@ function posToCell(p) {
   if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return null;
   return { row, col };
 }
+
+const CAPTURE = new URLSearchParams(location.search).has('capture');
+if (CAPTURE) document.documentElement.classList.add('capture');
+let forcedDt = null;
 
 // ============================================================ State
 const save = {
@@ -1151,14 +1155,14 @@ function killUnit(u) {
   u.play('death', 0.1);
   audio.play('die', { volume: 0.6 });
   const p = u.group.position.clone();
-  setTimeout(() => {
+  tween(0.9, () => {}, () => {
     if (!u.group.parent) return;
     smoke(p.clone().setY(0.5 + (u.flying ? 0.5 : 0)), 12);
     burst(p.clone().setY(0.8), u.team === 'player' ? C.blue : C.purple, 16, 4, 0.5, 0.5, 3);
     const sx = u.group.scale.x;
     tween(0.25, (k) => u.group.scale.setScalar(sx * (1 - k)), () => { if (u.team === 'enemy') removeUnit(u); else u.group.visible = false; });
     if (u.team === 'enemy') flyCoins(p.clone().setY(1), u.isBoss ? 12 : Math.min(5, 1 + Math.floor(u.tier / 2)));
-  }, 900);
+  });
   if (u.isBoss) { slowMo(1.2); shake = 1; audio.play('slam', { volume: 1 }); }
 }
 
@@ -1633,12 +1637,14 @@ window.addEventListener('contextmenu', (e) => e.preventDefault());
 // ============================================================ Main loop
 let last = performance.now();
 let lowQuality = false;
+let capFocus = null;
+let capZoom = CAPTURE ? 0.66 : 1;
 let slowFrames = 0;
 let elapsed = 0;
 function frame() {
-  requestAnimationFrame(frame);
+  if (!CAPTURE) requestAnimationFrame(frame);
   const now = performance.now();
-  const raw = Math.min((now - last) / 1000, 0.05);
+  const raw = forcedDt !== null ? forcedDt : Math.min((now - last) / 1000, 0.05);
   last = now;
   if (paused || adActive) { renderer.render(scene, camera); return; }
   if (slowMoTimer > 0) { slowMoTimer -= raw; if (slowMoTimer <= 0) timeScale = 1; }
@@ -1667,7 +1673,7 @@ function frame() {
       const g = u.mergeGlow ? 0.35 + Math.sin(elapsed * 10) * 0.25 : 0;
       for (const m of u.mats) {
         if (!m.emissive) m.emissive = new THREE.Color();
-        const v = u.flash * 1.4 + g;
+        const v = u.flash * 0.55 + g;
         m.emissive.setRGB(v + (u.aura ? 0.3 : 0), v + (u.aura ? 0.25 : 0), v * (u.mergeGlow ? 0.4 : 1));
         m.emissiveIntensity = 1;
       }
@@ -1695,6 +1701,22 @@ function frame() {
     tmp.lerpVectors(camLook, camZoom.look, camZoom.k);
   } else { camera.position.copy(camBase); tmp.copy(camLook); }
   camera.position.x += rand(-s, s); camera.position.y += rand(-s, s);
+  if (CAPTURE && !camZoom) {
+    // Trailer camera: closer, slowly orbiting, and following the fight
+    const alive = units.filter((u) => u.alive);
+    const focus = new THREE.Vector3(0, 0.8, 2.5);
+    if (state === 'battle' || state === 'result') {
+      const c = new THREE.Vector3();
+      for (const u of alive) c.add(u.group.position);
+      if (alive.length) c.multiplyScalar(1 / alive.length);
+      focus.set(c.x * 0.6, 1, c.z);
+    }
+    capFocus = capFocus ? capFocus.lerp(focus, Math.min(1, raw * 2)) : focus.clone();
+    const a = Math.sin(elapsed * 0.3) * 0.22;
+    const off = new THREE.Vector3().subVectors(camBase, camLook).multiplyScalar(capZoom).applyAxisAngle(new THREE.Vector3(0, 1, 0), a);
+    camera.position.copy(capFocus).add(off);
+    tmp.copy(capFocus);
+  }
   camera.lookAt(tmp);
   renderer.render(scene, camera);
 }
@@ -1786,11 +1808,55 @@ if (platform.name === 'local') {
       showScreen('win', false); showScreen('lose', false);
       return { level, count, won: en === 0 && pl > 0, time: t, playerLeft: pl, enemyLeft: en, you: armyPower(board.map((b) => ({ stats: unitStats(b.type, b.tier) }))), foe: armyPower(enemyUnits()) };
     },
-    camera, scene, expected, restartLevel: () => restartLevel(), newGame: () => newGame(), screenOf(u) { const v = u.group.position.clone().setY(u.height * 0.5); v.project(camera); return [(v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight]; },
+    camera, scene, expected,
+    step(dt) { forcedDt = dt; frame(); forcedDt = null; },
+    async setupDemo(board, level, opts = {}) {
+      for (const u of [...units]) removeUnit(u);
+      save.level = level;
+      save.discovered = { melee: 10, ranged: 10 };
+      save.coins = opts.coins || 2400;
+      hintShown = true;
+      await Promise.all(board.map((b) => createUnit({ team: 'player', ...b })));
+      battleBoard = board;
+      if (!opts.deferLevel) await setupLevel();
+      $('hint').classList.add('hidden');
+    },
+    setupLevel: () => setupLevel(),
+    demoMerge(type, tier) {
+      const list = playerUnits().filter((u) => u.alive && u.type === type && u.tier === tier);
+      const [a, b] = list;
+      if (!a || !b) return 'no pair';
+      const hand = document.createElement('div');
+      hand.className = 'demo-hand'; hand.textContent = '👆';
+      document.body.appendChild(hand);
+      const start = a.group.position.clone();
+      const end = b.group.position.clone();
+      a.play('move');
+      for (const o of playerUnits()) if (o !== a && o.type === type && o.tier === tier) o.mergeGlow = true;
+      tween(0.12, (k) => a.group.scale.setScalar(1 + 0.15 * k));
+      tween(0.75, (k) => {
+        const e = easeOutCubic(Math.min(1, k * 1.15));
+        a.group.position.lerpVectors(start, end, e);
+        a.group.position.y = Math.sin(Math.min(1, k * 1.15) * Math.PI) * 1.2 + (k > 0.1 ? 0.6 : 0);
+        tmp.copy(a.group.position).setY(a.height * 0.4).project(camera);
+        hand.style.transform = `translate(${(tmp.x * 0.5 + 0.5) * innerWidth}px, ${(-tmp.y * 0.5 + 0.5) * innerHeight}px)`;
+      }, () => {
+        for (const o of playerUnits()) o.mergeGlow = false;
+        hand.remove();
+        merge(a, b);
+      });
+      return 'ok';
+    },
+    clickFight() { battleBoard = savedBoard(); startBattle(); },
+    hero(px, py, pz, lx, ly, lz) { camZoom = { pos: new THREE.Vector3(px, py, pz), look: new THREE.Vector3(lx, ly, lz), k: 1 }; },
+    heroOff() { camZoom = null; },
+    setCapZoom(z) { capZoom = z; },
+    cleanUnits() { for (const u of units) { u.flash = 0; u.hpBar.visible = false; if (u.badge) u.badge.visible = false; for (const m of u.mats) { m.emissive && m.emissive.setRGB(u.aura ? 0.3 : 0, u.aura ? 0.25 : 0, 0); } } },
+    get battleOver() { return state === 'result'; }, restartLevel: () => restartLevel(), newGame: () => newGame(), screenOf(u) { const v = u.group.position.clone().setY(u.height * 0.5); v.project(camera); return [(v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight]; },
   };
 }
 
-requestAnimationFrame(frame);
+if (!CAPTURE) requestAnimationFrame(frame);
 boot().catch((e) => {
   console.error(e);
   $('loading').innerHTML = '<div class="logo"><b>Oops!</b><span style="font-size:16px">Could not load the game. Please refresh.</span></div>';
