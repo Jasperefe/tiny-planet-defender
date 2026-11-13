@@ -5,12 +5,12 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { platform, hooks } from './platform.js?v=20261113110444';
-import { AudioManager } from './audio.js?v=20261113110444';
+import { platform, hooks, detectLanguage } from './platform.js?v=20261113121231';
+import { AudioManager } from './audio.js?v=20261113121231';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
   buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
-} from './data.js?v=20261113110444';
+} from './data.js?v=20261113121231';
 
 // ============================================================ Helpers
 const $ = (id) => document.getElementById(id);
@@ -1106,7 +1106,6 @@ function startBattle() {
   audio.play('bell', { volume: 0.4, vary: 0 });
   showBanner('FIGHT!', 'gold');
   setMusic();
-  platform.gameplayStart();
   for (const u of units) {
     if (u.team === 'player') { const r0 = u.group.rotation.y; tween(0.3, (k) => { u.group.rotation.y = lerp(r0, Math.PI, k); }); }
     u.hpBar.visible = true;
@@ -1298,7 +1297,6 @@ function updateBattle(dt) {
 
 async function endBattle(won) {
   state = 'result';
-  platform.gameplayStop();
   for (const p of projectiles) scene.remove(p.mesh);
   projectiles.length = 0;
   if (won) {
@@ -1585,7 +1583,6 @@ click('resetYes', () => { showScreen('confirmReset', false); setPaused(false); n
 async function restartLevel() {
   if (state === 'loading-level' || state === 'chest') return;
   const wasBattle = state === 'battle' || state === 'result';
-  if (wasBattle) platform.gameplayStop();
   state = 'loading-level';
   for (const p of projectiles) scene.remove(p.mesh);
   projectiles.length = 0;
@@ -1599,7 +1596,6 @@ async function restartLevel() {
 // Wipe all progress and begin again from level 1
 async function newGame() {
   if (state === 'loading-level' || state === 'chest') return;
-  if (state === 'battle') platform.gameplayStop();
   state = 'loading-level';
   for (const p of projectiles) scene.remove(p.mesh);
   projectiles.length = 0;
@@ -1620,19 +1616,33 @@ async function newGame() {
 
 function setPaused(p) {
   paused = p;
-  if (state === 'battle') { if (p) platform.gameplayStop(); else platform.gameplayStart(); }
+  syncGameplay();
 }
 hooks.onAdStart = () => { adActive = true; audio.setBlocked(true); };
 hooks.onAdEnd = () => { adActive = false; audio.setBlocked(!platform.isAudioEnabled()); };
-hooks.onPause = () => { paused = true; audio.setPaused(true); };
-hooks.onResume = () => { paused = false; audio.setPaused(false); };
+hooks.onPause = () => { paused = true; audio.setPaused(true); syncGameplay(); };
+hooks.onResume = () => { paused = false; audio.setPaused(false); syncGameplay(); };
 hooks.onAudioChange = (on) => audio.setBlocked(!on || adActive);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) audio.setPaused(true);
-  else if (!adActive) audio.setPaused(false);
+  else if (!adActive && !paused) audio.setPaused(false);
+  syncGameplay();
 });
+window.addEventListener('blur', () => audio.setPaused(true));
+window.addEventListener('focus', () => { if (!adActive && !document.hidden && !paused) audio.setPaused(false); });
 window.addEventListener('resize', resize);
 window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ============================================================ Gameplay markup for platforms
+// "Playing" means: a level is active (preparing or fighting), no menu or ad is open, the tab is visible.
+let gameplayOn = false;
+function syncGameplay() {
+  const menuOpen = !!document.querySelector('.screen.show');
+  const on = (state === 'prep' || state === 'battle') && !paused && !adActive && !document.hidden && !menuOpen;
+  if (on === gameplayOn) return;
+  gameplayOn = on;
+  if (on) platform.gameplayStart(); else platform.gameplayStop();
+}
 
 // ============================================================ Main loop
 let last = performance.now();
@@ -1646,6 +1656,7 @@ function frame() {
   const now = performance.now();
   const raw = forcedDt !== null ? forcedDt : Math.min((now - last) / 1000, 0.05);
   last = now;
+  syncGameplay();
   if (paused || adActive) { renderer.render(scene, camera); return; }
   if (slowMoTimer > 0) { slowMoTimer -= raw; if (slowMoTimer <= 0) timeScale = 1; }
   const dt = raw * timeScale;
@@ -1760,6 +1771,7 @@ async function boot() {
   $('top').classList.remove('hidden');
   applySettings();
   audio.setBlocked(!platform.isAudioEnabled());
+  document.documentElement.lang = ['en'].includes(detectLanguage()) ? detectLanguage() : 'en';
   platform.gameReady();
   await setupLevel();
 

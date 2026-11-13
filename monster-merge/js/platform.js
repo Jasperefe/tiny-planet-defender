@@ -162,5 +162,90 @@ const youtube = {
   },
 };
 
-const all = { local, crazygames, youtube };
+// ---------------------------------------------------------------- Playhop / Yandex Games
+const playhop = {
+  name: 'playhop',
+  hasRewarded: true,
+  ysdk: null,
+  player: null,
+  playing: false,
+  lang: 'en',
+  async init() {
+    if (!window.YaGames) return;
+    try {
+      this.ysdk = await withTimeout(window.YaGames.init(), 8000, null);
+      if (!this.ysdk) return;
+      try { this.lang = this.ysdk.environment.i18n.lang || 'en'; } catch {}
+      this.ysdk.on && this.ysdk.on('game_api_pause', () => hooks.onPause());
+      this.ysdk.on && this.ysdk.on('game_api_resume', () => hooks.onResume());
+      try { this.player = await withTimeout(this.ysdk.getPlayer({ scopes: false }), 5000, null); } catch { this.player = null; }
+    } catch (e) { console.warn('Yandex SDK init failed', e); this.ysdk = null; }
+  },
+  firstFrameReady() {},
+  gameReady() { try { this.ysdk && this.ysdk.features.LoadingAPI && this.ysdk.features.LoadingAPI.ready(); } catch {} },
+  gameplayStart() {
+    if (this.playing) return;
+    this.playing = true;
+    try { this.ysdk && this.ysdk.features.GameplayAPI && this.ysdk.features.GameplayAPI.start(); } catch {}
+  },
+  gameplayStop() {
+    if (!this.playing) return;
+    this.playing = false;
+    try { this.ysdk && this.ysdk.features.GameplayAPI && this.ysdk.features.GameplayAPI.stop(); } catch {}
+  },
+  happyTime() {},
+  async loadData() {
+    if (this.player) {
+      try {
+        const d = await this.player.getData(['save']);
+        if (d && d.save) return d.save;
+      } catch {}
+    }
+    return local.loadData();
+  },
+  saveData(obj) {
+    local.saveData(obj); // also keep a local copy
+    if (this.player) { try { this.player.setData({ save: obj }, false); } catch {} }
+  },
+  rewardedAd() {
+    return new Promise((resolve) => {
+      if (!this.ysdk) { resolve(false); return; }
+      let rewarded = false;
+      try {
+        this.ysdk.adv.showRewardedVideo({
+          callbacks: {
+            onOpen: () => hooks.onAdStart(),
+            onRewarded: () => { rewarded = true; },
+            onClose: () => { hooks.onAdEnd(); resolve(rewarded); },
+            onError: () => { hooks.onAdEnd(); resolve(false); },
+          },
+        });
+      } catch { resolve(false); }
+    });
+  },
+  midgameAd() {
+    return new Promise((resolve) => {
+      if (!this.ysdk) { resolve(); return; }
+      let opened = false;
+      try {
+        this.ysdk.adv.showFullscreenAdv({
+          callbacks: {
+            onOpen: () => { opened = true; hooks.onAdStart(); },
+            onClose: () => { if (opened) hooks.onAdEnd(); resolve(); },
+            onError: () => { if (opened) hooks.onAdEnd(); resolve(); },
+            onOffline: () => resolve(),
+          },
+        });
+      } catch { resolve(); }
+    });
+  },
+  sendScore() {},
+  isAudioEnabled() { return true; },
+};
+
+const all = { local, crazygames, youtube, playhop };
 export const platform = all[window.PLATFORM] || local;
+export function detectLanguage() {
+  if (platform.lang) return platform.lang;
+  return (navigator.language || 'en').slice(0, 2);
+}
