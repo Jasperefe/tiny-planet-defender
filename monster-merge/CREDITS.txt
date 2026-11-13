@@ -1,0 +1,24 @@
+MONSTER MERGE ARENA - CREDITS
+=============================
+
+Game design & code
+  Esire Omoefe
+
+3D MODELS (all by Quaternius - quaternius.com - CC0 1.0 public domain)
+  Ultimate Monsters Pack (all monsters)
+  Ultimate Platformer Pack (grass tiles, trees, clouds, tower, chest, coins)
+  Stylized Nature MegaKit (trees, bushes, flowers, rocks)
+  Fantasy Props MegaKit (banners, barrels, crates, torches, chest)
+
+SOUND EFFECTS (Kenney - www.kenney.nl - CC0 1.0)
+  Impact Sounds, RPG Audio, Interface Sounds
+
+MUSIC
+  "JRPG Epic Rock Battle Theme #1" - HydroGene - OpenGameArt.org - CC0
+    https://opengameart.org/content/jrpg-epic-rock-battle-theme-1
+  "RPG Battle Loop" - iamoneabe - OpenGameArt.org - CC0
+    https://opengameart.org/content/rpg-battle-loop
+
+ENGINE
+  three.js - https://threejs.org - MIT License
+  meshoptimizer decoder - MIT License

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<link rel="icon" href="data:,">
+<title>Monster Merge Arena</title>
+<script>window.PLATFORM = "local";</script>
+<script>window.PLATFORM = window.PLATFORM || 'local';</script>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="fx"></div>
+
+<!-- Loading -->
+<div id="loading" class="screen show">
+  <div class="logo"><span>MONSTER</span><b>MERGE ARENA</b></div>
+  <div class="bar"><i id="loadBar"></i></div>
+  <div class="load-tip">Merge two of the same monster to evolve it!</div>
+</div>
+
+<!-- Top bar -->
+<div id="top" class="hidden">
+  <div class="top-left">
+    <button id="bookBtn" class="round-btn" aria-label="Monster book">📖</button>
+  </div>
+  <div class="level-box">
+    <div class="level-title">LEVEL <span id="levelNum">1</span></div>
+    <div id="road" class="road"></div>
+  </div>
+  <div class="top-right">
+    <div class="coins"><span class="coin-icon"></span><span id="coinNum">0</span></div>
+    <button id="settingsBtn" class="round-btn" aria-label="Settings">⚙️</button>
+  </div>
+</div>
+
+<!-- Enemy power vs your power -->
+<div id="powerBar" class="power hidden">
+  <div class="power-side you"><small>YOU</small><b id="powerYou">0</b></div>
+  <div class="power-vs">VS</div>
+  <div class="power-side foe"><small>ENEMY</small><b id="powerFoe">0</b></div>
+</div>
+
+<!-- Bottom controls -->
+<div id="bottom" class="hidden">
+  <button id="freeBtn" class="free-btn hidden"><span style="font-size:28px">🎁</span>FREE<br>MONSTER<span class="ad-tag" style="margin:2px 0 0">AD</span></button>
+  <div class="bottom-row">
+    <button id="buyMelee" class="buy-btn melee">
+      <span class="buy-ico">👊</span><span class="buy-name">BRAWLER</span>
+      <span class="buy-price"><span class="coin-icon"></span><span id="priceMelee">6</span></span>
+    </button>
+    <button id="fightBtn" class="fight-btn">FIGHT!</button>
+    <button id="buyRanged" class="buy-btn ranged">
+      <span class="buy-ico">🪽</span><span class="buy-name">FLYER</span>
+      <span class="buy-price"><span class="coin-icon"></span><span id="priceRanged">6</span></span>
+    </button>
+  </div>
+</div>
+
+<div id="hint" class="hint hidden"></div>
+<div id="banner" class="banner"></div>
+<div id="bossName" class="boss-name hidden"></div>
+
+<!-- Victory -->
+<div id="win" class="screen">
+  <div class="panel">
+    <div class="ribbon gold">VICTORY!</div>
+    <div class="stars"><span>★</span><span>★</span><span>★</span></div>
+    <div class="reward"><span class="coin-icon big"></span><span id="winCoins">0</span></div>
+    <button id="tripleBtn" class="btn green hidden"><span class="ad-tag">AD</span> CLAIM x3</button>
+    <button id="claimBtn" class="btn blue">CONTINUE</button>
+  </div>
+</div>
+
+<!-- Defeat -->
+<div id="lose" class="screen">
+  <div class="panel">
+    <div class="ribbon red">DEFEAT</div>
+    <p class="lose-tip" id="loseTip">Merge more monsters to get stronger!</p>
+    <div class="reward"><span class="coin-icon big"></span><span id="loseCoins">0</span></div>
+    <button id="retryBtn" class="btn blue">TRY AGAIN</button>
+  </div>
+</div>
+
+<!-- New monster discovered -->
+<div id="newMon" class="screen">
+  <div class="panel new-mon">
+    <div class="ribbon purple">NEW MONSTER!</div>
+    <img id="newMonImg" alt="">
+    <div class="new-name" id="newMonName"></div>
+    <div class="new-tier" id="newMonTier"></div>
+    <button id="newMonBtn" class="btn green">AWESOME!</button>
+  </div>
+</div>
+
+<!-- Chest -->
+<div id="chestHint" class="chest-hint hidden">TAP THE CHEST!</div>
+<div id="chestWin" class="screen">
+  <div class="panel">
+    <div class="ribbon gold">TREASURE!</div>
+    <div class="reward"><span class="coin-icon big"></span><span id="chestCoins">0</span></div>
+    <div class="chest-extra" id="chestExtra"></div>
+    <button id="chestBtn" class="btn blue">COLLECT</button>
+  </div>
+</div>
+
+<!-- Daily reward -->
+<div id="daily" class="screen">
+  <div class="panel">
+    <div class="ribbon gold">DAILY GIFT</div>
+    <div class="daily-day" id="dailyDay">Day 1</div>
+    <div class="reward"><span class="coin-icon big"></span><span id="dailyCoins">0</span></div>
+    <button id="dailyBtn" class="btn green">CLAIM</button>
+  </div>
+</div>
+
+<!-- Monster book -->
+<div id="book" class="screen">
+  <div class="panel wide">
+    <div class="ribbon purple">MONSTER BOOK</div>
+    <div class="book-progress" id="bookProgress"></div>
+    <div class="book-line"><h3>👊 Brawlers</h3><div class="book-grid" id="bookMelee"></div></div>
+    <div class="book-line"><h3>🪽 Flyers</h3><div class="book-grid" id="bookRanged"></div></div>
+    <button id="bookClose" class="btn blue">CLOSE</button>
+  </div>
+</div>
+
+<!-- Settings -->
+<div id="settings" class="screen">
+  <div class="panel">
+    <div class="ribbon blue">SETTINGS</div>
+    <button id="sfxBtn" class="btn ghost">SOUND: ON</button>
+    <button id="musicBtn" class="btn ghost">MUSIC: ON</button>
+    <button id="creditsBtn" class="btn ghost">CREDITS</button>
+    <button id="settingsClose" class="btn blue">CLOSE</button>
+  </div>
+</div>
+
+<!-- Credits -->
+<div id="credits" class="screen">
+  <div class="panel">
+    <div class="ribbon blue">CREDITS</div>
+    <div class="credits-list">
+      <p><b>Game design &amp; code</b><br>Esire Omoefe</p>
+      <p><b>Monsters: Ultimate Monsters Pack</b><br>Quaternius &middot; quaternius.com &middot; CC0</p>
+      <p><b>Arena: Ultimate Platformer Pack, Stylized Nature MegaKit, Fantasy Props MegaKit</b><br>Quaternius &middot; quaternius.com &middot; CC0</p>
+      <p><b>Sound effects: Impact Sounds, RPG Audio, Interface Sounds</b><br>Kenney &middot; www.kenney.nl &middot; CC0</p>
+      <p><b>Music: "JRPG Epic Rock Battle Theme #1"</b><br>HydroGene &middot; OpenGameArt.org &middot; CC0</p>
+      <p><b>Music: "RPG Battle Loop"</b><br>iamoneabe &middot; OpenGameArt.org &middot; CC0</p>
+      <p><b>Engine</b><br>three.js &middot; MIT License</p>
+    </div>
+    <button id="creditsClose" class="btn blue">BACK</button>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "./lib/three/three.module.js", "three/addons/": "./lib/three/addons/" } }
+</script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
