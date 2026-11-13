@@ -264,3 +264,6 @@ html, body {
 .sell-bin.locked { filter: grayscale(1); }
 .sell-bin { white-space: nowrap; }
 @media (max-width: 420px) { .sell-bin { font-size: 15px; padding: 12px 16px; gap: 8px; } .sell-bin .bin-ico { font-size: 24px; } }
+
+.btn.red { background: linear-gradient(#ff8a8a, #e0344a); box-shadow: 0 6px 0 var(--red-dark); }
+.btn.ghost.danger { color: #e0344a; border-color: #f3c0c0; box-shadow: 0 4px 0 #e9a3a3; }

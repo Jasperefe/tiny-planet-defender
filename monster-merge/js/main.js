@@ -1572,6 +1572,47 @@ click('sfxBtn', () => { save.sfx = !save.sfx; applySettings(); persist(); });
 click('musicBtn', () => { save.music = !save.music; applySettings(); persist(); });
 click('creditsBtn', () => { showScreen('settings', false); showScreen('credits', true); });
 click('creditsClose', () => { showScreen('credits', false); showScreen('settings', true); });
+click('restartLevelBtn', () => { showScreen('settings', false); setPaused(false); restartLevel(); });
+click('newGameBtn', () => { showScreen('settings', false); showScreen('confirmReset', true); });
+click('resetNo', () => { showScreen('confirmReset', false); setPaused(false); });
+click('resetYes', () => { showScreen('confirmReset', false); setPaused(false); newGame(); });
+
+// Start the current level again: your army returns to its squares, the enemy army is rebuilt
+async function restartLevel() {
+  if (state === 'loading-level' || state === 'chest') return;
+  const wasBattle = state === 'battle' || state === 'result';
+  if (wasBattle) platform.gameplayStop();
+  state = 'loading-level';
+  for (const p of projectiles) scene.remove(p.mesh);
+  projectiles.length = 0;
+  showScreen('win', false); showScreen('lose', false);
+  timeScale = 1; slowMoTimer = 0; camZoom = null;
+  await restoreArmy(wasBattle ? battleBoard : savedBoard());
+  persist();
+  await setupLevel();
+}
+
+// Wipe all progress and begin again from level 1
+async function newGame() {
+  if (state === 'loading-level' || state === 'chest') return;
+  if (state === 'battle') platform.gameplayStop();
+  state = 'loading-level';
+  for (const p of projectiles) scene.remove(p.mesh);
+  projectiles.length = 0;
+  showScreen('win', false); showScreen('lose', false);
+  timeScale = 1; slowMoTimer = 0; camZoom = null;
+  Object.assign(save, {
+    level: 1, coins: START_COINS, buys: { melee: 0, ranged: 0 },
+    board: [{ type: 'melee', tier: 1, row: 0, col: 2 }, { type: 'melee', tier: 1, row: 0, col: 1 }],
+    discovered: { melee: 1, ranged: 0 }, levelsSinceAd: 0, freeUsedLevel: 0,
+  });
+  hintShown = false;
+  battleBoard = save.board.slice();
+  await restoreArmy(save.board);
+  persist();
+  bumpCoins();
+  await setupLevel();
+}
 
 function setPaused(p) {
   paused = p;
@@ -1745,7 +1786,7 @@ if (platform.name === 'local') {
       showScreen('win', false); showScreen('lose', false);
       return { level, count, won: en === 0 && pl > 0, time: t, playerLeft: pl, enemyLeft: en, you: armyPower(board.map((b) => ({ stats: unitStats(b.type, b.tier) }))), foe: armyPower(enemyUnits()) };
     },
-    camera, scene, expected, screenOf(u) { const v = u.group.position.clone().setY(u.height * 0.5); v.project(camera); return [(v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight]; },
+    camera, scene, expected, restartLevel: () => restartLevel(), newGame: () => newGame(), screenOf(u) { const v = u.group.position.clone().setY(u.height * 0.5); v.project(camera); return [(v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight]; },
   };
 }
 
