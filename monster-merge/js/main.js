@@ -5,12 +5,12 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { platform, hooks } from './platform.js';
-import { AudioManager } from './audio.js';
+import { platform, hooks } from './platform.js?v=20261113095451';
+import { AudioManager } from './audio.js?v=20261113095451';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
   buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
-} from './data.js';
+} from './data.js?v=20261113095451';
 
 // ============================================================ Helpers
 const $ = (id) => document.getElementById(id);
