@@ -111,10 +111,10 @@ export const expected = [];
 
 // Difficulty multiplier: gentle start, fair middle, tougher late game.
 function difficulty(level) {
-  if (level <= 2) return 0.45;
-  if (level <= 10) return 0.6 + (level - 3) * 0.04;
-  if (level <= 30) return 0.88 + (level - 10) * 0.004;
-  return Math.min(1.12, 0.96 + (level - 30) * 0.0025);
+  if (level <= 2) return 0.5;
+  if (level <= 10) return 0.65 + (level - 3) * 0.045;
+  if (level <= 30) return 1.0 + (level - 10) * 0.004;
+  return Math.min(1.22, 1.08 + (level - 30) * 0.0025);
 }
 
 // Seeded random so a level always has the same army
