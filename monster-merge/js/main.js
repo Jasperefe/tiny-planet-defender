@@ -5,15 +5,15 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { platform, hooks, detectLanguage } from './platform.js?v=20261117121019';
-import { AudioManager } from './audio.js?v=20261117121019';
+import { platform, hooks, detectLanguage } from './platform.js?v=20261117131236';
+import { AudioManager } from './audio.js?v=20261117131236';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
   buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
   ELEMENTS, ARENAS, arenaIndex, arenaTwist, unitValue, coinUnits, enemyBudget, mercy,
-} from './data.js?v=20261117121019';
-import { isProc, procFlying, procBig, buildCreature } from './creatures.js?v=20261117121019';
-import { THEMES, themeIndex, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261117121019';
+} from './data.js?v=20261117131236';
+import { isProc, procFlying, procBig, buildCreature } from './creatures.js?v=20261117131236';
+import { THEMES, themeIndex, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261117131236';
 
 // ============================================================ Helpers
 const $ = (id) => document.getElementById(id);
@@ -74,6 +74,7 @@ const save = {
   discovered: { melee: 1, ranged: 0 },
   sfx: true, music: true, lastDaily: '', streak: 0, levelsSinceAd: 0, freeUsedLevel: 0,
   foe: null, // { level, budget, losses } the enemy army stays the same on retries
+  guideSeen: false, elemSeen: {},
 };
 let state = 'loading'; // loading | prep | battle | result | chest
 let paused = false;
@@ -934,11 +935,100 @@ async function setupLevel() {
   setMusic();
   showBottom(true);
   if (newArena || (save.level - 1) % 10 === 0) await arenaIntro();
+  if (!save.guideSeen) await openGuide();
+  await maybeElementCard(L);
   if (L.boss) await bossIntro(boss);
   else showBanner(`LEVEL ${save.level}`);
   maybeHint();
   preloadPlayerTiers();
 }
+
+// ============================================================ How to play
+const thumbImg = (model, label, sub) => {
+  const id = 'g' + Math.random().toString(36).slice(2);
+  thumbnail(model).then((url) => { const el = document.getElementById(id); if (el) el.src = url; });
+  return `<div class="g-mon"><img id="${id}" alt="">${label ? `<span>${label}</span>` : ''}${sub ? `<small>${sub}</small>` : ''}</div>`;
+};
+const GUIDE = [
+  {
+    title: 'MERGE TO EVOLVE',
+    art: () => `<div class="g-row">${thumbImg('Blob_PinkBlob', 'Lv 1')}<b>+</b>${thumbImg('Blob_PinkBlob', 'Lv 1')}<b>➜</b>${thumbImg('Blob_GreenBlob', 'Lv 2')}</div>`,
+    text: 'Drag a monster onto the <b>SAME</b> monster to merge them. Each level is about <b>twice as strong</b>!',
+  },
+  {
+    title: 'BUILD YOUR ARMY',
+    art: () => `<div class="g-row">${thumbImg('Big_Orc', '👊 BRAWLER', 'goes in FRONT')}${thumbImg('Flying_Dragon', '🪽 FLYER', 'stays BEHIND')}</div>`,
+    text: '<b>Brawlers</b> hit up close: put them in front. <b>Flyers</b> shoot from far: keep them safe at the back. Drag monsters to move them.',
+  },
+  {
+    title: 'FIGHT SMART',
+    art: () => `<div class="g-power"><span class="y"><small>YOU</small>120</span>VS<span class="f"><small>ENEMY</small>150</span></div>`,
+    text: 'Compare <b>YOUR</b> power with the <b>ENEMY</b> power, then tap FIGHT! Every fight is tough. Lost? Keep 30% coins, and the <b>same enemy gets weaker</b> each try.',
+  },
+  {
+    title: 'ELEMENT ENEMIES',
+    art: () => `<div class="g-elems">${Object.values(ELEMENTS).map((e) => `<div class="g-elem" style="--c:${e.css}"><em>${e.icon}</em><div><b>${e.name}</b>${e.short}</div></div>`).join('')}<div class="g-elem" style="--c:#ff6ad8"><em>🌌</em><div><b>COSMIC</b>All of them!</div></div></div>`,
+    text: 'Enemies with a <b>glowing ring</b> have element powers. Take them out first!',
+  },
+  {
+    title: 'SECRETS & TIPS',
+    art: () => `<div class="g-tips">
+      <div class="g-tip"><em><span class="g-q">?</span></em>Hidden enemy level. Be ready!</div>
+      <div class="g-tip"><em>🗑️</em>Drag to the bin to sell</div>
+      <div class="g-tip"><em>🎁</em>Free monster every level</div>
+      <div class="g-tip"><em>💀</em>Boss every 10 levels</div>
+      <div class="g-tip"><em>📦</em>Treasure every 5 levels</div>
+      <div class="g-tip"><em>🗺️</em>New arena every 10 levels</div></div>`,
+    text: 'From level 15 the <b>ENEMY power</b> can be <b>???</b>. Trust your army!',
+  },
+];
+let guidePage = 0, guideDone = null;
+function renderGuide() {
+  const g = GUIDE[guidePage];
+  $('guideTitle').textContent = g.title;
+  $('guideArt').innerHTML = g.art();
+  $('guideText').innerHTML = g.text;
+  $('guideDots').innerHTML = GUIDE.map((_, i) => `<i class="${i === guidePage ? 'on' : ''}"></i>`).join('');
+  $('guideBack').style.visibility = guidePage ? 'visible' : 'hidden';
+  $('guideNext').textContent = guidePage === GUIDE.length - 1 ? "LET'S GO!" : 'NEXT';
+}
+function openGuide() {
+  guidePage = 0;
+  renderGuide();
+  showScreen('guide', true);
+  return new Promise((r) => { guideDone = r; });
+}
+function closeGuide() {
+  showScreen('guide', false);
+  if (!save.guideSeen) { save.guideSeen = true; persist(); }
+  if (guideDone) { const d = guideDone; guideDone = null; d(); }
+}
+
+// First time an element shows up: explain it
+async function maybeElementCard(L) {
+  if (!save.elemSeen) save.elemSeen = {};
+  const arena = ARENAS[arenaIndex(save.level)];
+  const found = [...L.units.map((u) => u.element), L.boss && L.boss.element].filter(Boolean);
+  let key = null;
+  if (arena.element === 'cosmic' && found.length) key = save.elemSeen.cosmic ? null : 'cosmic';
+  else key = found.find((e) => !save.elemSeen[e]) || null;
+  if (!key) return;
+  save.elemSeen[key] = true;
+  persist();
+  const e = key === 'cosmic'
+    ? { name: 'COSMIC', icon: '🌌', css: '#ff6ad8', desc: 'COSMIC enemies can have ANY element power!', tip: 'Watch the ring colors and use everything you learned.' }
+    : ELEMENTS[key];
+  const card = $('elemCard');
+  card.style.setProperty('--c', e.css);
+  $('elemIcon').textContent = e.icon;
+  $('elemName').textContent = e.name;
+  $('elemDesc').textContent = e.desc;
+  $('elemTip').textContent = '💡 ' + e.tip;
+  audio.play('levelup', { volume: 0.6, vary: 0 });
+  showScreen('elemCard', true);
+  await new Promise((r) => { elemCardDone = r; });
+}
+let elemCardDone = null;
 
 // Big title card for a new arena, with its twist
 async function arenaIntro() {
@@ -1758,6 +1848,11 @@ click('settingsBtn', () => { showScreen('settings', true); setPaused(true); });
 click('settingsClose', () => { showScreen('settings', false); setPaused(false); });
 click('sfxBtn', () => { save.sfx = !save.sfx; applySettings(); persist(); });
 click('musicBtn', () => { save.music = !save.music; applySettings(); persist(); });
+click('guideBtn', async () => { showScreen('settings', false); await openGuide(); setPaused(false); });
+click('guideNext', () => { if (guidePage < GUIDE.length - 1) { guidePage++; renderGuide(); } else closeGuide(); });
+click('guideBack', () => { if (guidePage > 0) { guidePage--; renderGuide(); } });
+click('guideSkip', () => closeGuide());
+click('elemOk', () => { showScreen('elemCard', false); if (elemCardDone) { const d = elemCardDone; elemCardDone = null; d(); } });
 click('creditsBtn', () => { showScreen('settings', false); showScreen('credits', true); });
 click('creditsClose', () => { showScreen('credits', false); showScreen('settings', true); });
 click('restartLevelBtn', () => { showScreen('settings', false); setPaused(false); restartLevel(); });

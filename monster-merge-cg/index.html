@@ -8,7 +8,7 @@
 <script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
 <script>window.PLATFORM = "crazygames";</script>
 <script>window.PLATFORM = window.PLATFORM || 'local';</script>
-<link rel="stylesheet" href="css/style.css?v=20261117121019">
+<link rel="stylesheet" href="css/style.css?v=20261117131236">
 </head>
 <body>
 <canvas id="game"></canvas>
@@ -136,10 +136,37 @@
     <div class="ribbon blue">SETTINGS</div>
     <button id="sfxBtn" class="btn ghost">SOUND: ON</button>
     <button id="musicBtn" class="btn ghost">MUSIC: ON</button>
+    <button id="guideBtn" class="btn ghost">❓ HOW TO PLAY</button>
     <button id="creditsBtn" class="btn ghost">CREDITS</button>
     <button id="restartLevelBtn" class="btn ghost">🔄 RESTART LEVEL</button>
     <button id="newGameBtn" class="btn ghost danger">⚠️ NEW GAME</button>
     <button id="settingsClose" class="btn blue">CLOSE</button>
+  </div>
+</div>
+
+<!-- How to play -->
+<div id="guide" class="screen">
+  <div class="panel guide">
+    <div class="ribbon purple" id="guideTitle">HOW TO PLAY</div>
+    <button id="guideSkip" class="g-skip" aria-label="Close">✕</button>
+    <div class="g-art" id="guideArt"></div>
+    <p class="g-text" id="guideText"></p>
+    <div class="g-dots" id="guideDots"></div>
+    <div class="g-nav">
+      <button id="guideBack" class="btn ghost">BACK</button>
+      <button id="guideNext" class="btn green">NEXT</button>
+    </div>
+  </div>
+</div>
+<!-- New element card -->
+<div id="elemCard" class="screen">
+  <div class="panel">
+    <div class="ribbon red">NEW ENEMY POWER!</div>
+    <div class="e-icon" id="elemIcon"></div>
+    <div class="e-name" id="elemName"></div>
+    <p class="g-text" id="elemDesc"></p>
+    <p class="e-tip" id="elemTip"></p>
+    <button id="elemOk" class="btn green">GOT IT!</button>
   </div>
 </div>
 
@@ -173,6 +200,6 @@
 <script type="importmap">
 { "imports": { "three": "./lib/three/three.module.js", "three/addons/": "./lib/three/addons/" } }
 </script>
-<script type="module" src="js/main.js?v=20261117121019"></script>
+<script type="module" src="js/main.js?v=20261117131236"></script>
 </body>
 </html>
