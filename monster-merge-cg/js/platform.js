@@ -49,6 +49,7 @@ const crazygames = {
   name: 'crazygames',
   hasRewarded: true,
   adCapped: true, // the SDK limits midgame ads itself (max 1 every 3 minutes)
+  noMidAfterReward: true, // CrazyGames rule: no midgame right after a rewarded ad
   sdk: null,
   playing: false,
   async init() {
@@ -282,19 +283,35 @@ const playgama = {
     try { this.bridge && this.bridge.platform.sendMessage('gameplay_stopped'); } catch {}
   },
   happyTime() {},
+  // Playgama rule: progress is saved ONLY through Bridge storage (no localStorage),
+  // and not written too often: saves are batched and flushed when the page hides.
   async loadData() {
-    if (this.bridge) {
-      try {
-        const d = await withTimeout(this.bridge.storage.get(SAVE_KEY), 5000, null);
-        const obj = typeof d === 'string' ? JSON.parse(d) : d;
-        if (obj && obj.level) return obj;
-      } catch {}
-    }
-    return local.loadData();
+    if (!this.bridge) return null;
+    try {
+      const d = await withTimeout(this.bridge.storage.get(SAVE_KEY), 5000, null);
+      const obj = typeof d === 'string' ? JSON.parse(d) : d;
+      return obj && obj.level ? obj : null;
+    } catch { return null; }
   },
+  saveTimer: null,
+  pendingSave: null,
   saveData(obj) {
-    local.saveData(obj);
-    if (this.bridge) { try { this.bridge.storage.set(SAVE_KEY, JSON.stringify(obj)).catch(() => {}); } catch {} }
+    if (!this.bridge) return;
+    this.pendingSave = JSON.stringify(obj);
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => this.flushSave(), 2000);
+    if (!this.flushHooked) {
+      this.flushHooked = true;
+      const flush = () => this.flushSave();
+      document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
+      window.addEventListener('pagehide', flush);
+    }
+  },
+  flushSave() {
+    clearTimeout(this.saveTimer); this.saveTimer = null;
+    if (!this.bridge || this.pendingSave === null) return;
+    const data = this.pendingSave; this.pendingSave = null;
+    try { this.bridge.storage.set(SAVE_KEY, data).catch(() => {}); } catch {}
   },
   // Wraps a Bridge ad call into a promise; resolves true only when a rewarded ad paid out
   showAd(kind, placement) {
@@ -323,6 +340,7 @@ const playgama = {
   async midgameAd() { await this.showAd('i', 'level_break'); },
   sendScore(level) { try { this.bridge && this.bridge.platform.sendMessage('level_completed', { level }); } catch {} },
   isAudioEnabled() { try { return this.bridge ? this.bridge.platform.isAudioEnabled !== false : true; } catch { return true; } },
+  waitForSdk: true, // nothing loads before the Bridge is ready
 };
 
 const all = { local, crazygames, youtube, playhop, playgama };

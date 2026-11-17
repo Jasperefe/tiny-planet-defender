@@ -112,11 +112,11 @@ export const expected = [];
 // ---------------------------------------------------------------- Arenas & elements
 // Every 10 levels the arena changes. Each arena has its own creatures, an element twist and a boss.
 export const ELEMENTS = {
-  poison: { name: 'POISON', icon: '☠️', color: 0x6dff4a, css: '#5fd83a', desc: 'POISON enemies leave toxic damage over time!', short: 'Damage over time', tip: 'Kill them fast: poison stacks up to 3 times!' },
-  swift: { name: 'SWIFT', icon: '⚡', color: 0xffd23a, css: '#f0b400', desc: 'SWIFT enemies run and strike much faster!', short: 'Super fast', tip: 'Strong Brawlers in front stop them reaching your Flyers.' },
-  ice: { name: 'ICE', icon: '❄️', color: 0x8ad8ff, css: '#3aa8f0', desc: 'ICE enemies are tough and freeze your monsters!', short: 'Tough + freezes you', tip: 'Ice armor blocks part of every hit. Bring more damage!' },
-  fire: { name: 'FIRE', icon: '🔥', color: 0xff6a1f, css: '#ff6a1f', desc: 'FIRE enemies set your monsters ablaze!', short: 'Burns you', tip: 'Burning keeps hurting for 2 seconds. Bigger monsters survive it.' },
-  shadow: { name: 'SHADOW', icon: '🌑', color: 0xb070ff, css: '#9a5aff', desc: 'SHADOW enemies hit harder and steal life!', short: 'Steals life', tip: 'They heal by hitting you. Gang up on them first!' },
+  poison: { name: 'POISON', icon: 'poison', color: 0x6dff4a, css: '#5fd83a', desc: 'POISON enemies leave toxic damage over time!', short: 'Damage over time', tip: 'Kill them fast: poison stacks up to 3 times!' },
+  swift: { name: 'SWIFT', icon: 'swift', color: 0xffd23a, css: '#f0b400', desc: 'SWIFT enemies run and strike much faster!', short: 'Super fast', tip: 'Strong Brawlers in front stop them reaching your Flyers.' },
+  ice: { name: 'ICE', icon: 'ice', color: 0x8ad8ff, css: '#3aa8f0', desc: 'ICE enemies are tough and freeze your monsters!', short: 'Tough + freezes you', tip: 'Ice armor blocks part of every hit. Bring more damage!' },
+  fire: { name: 'FIRE', icon: 'fire', color: 0xff6a1f, css: '#ff6a1f', desc: 'FIRE enemies set your monsters ablaze!', short: 'Burns you', tip: 'Burning keeps hurting for 2 seconds. Bigger monsters survive it.' },
+  shadow: { name: 'SHADOW', icon: 'shadow', color: 0xb070ff, css: '#9a5aff', desc: 'SHADOW enemies hit harder and steal life!', short: 'Steals life', tip: 'They heal by hitting you. Gang up on them first!' },
 };
 export const ELEMENT_KEYS = Object.keys(ELEMENTS);
 export const ARENAS = [

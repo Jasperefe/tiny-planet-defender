@@ -5,15 +5,16 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { platform, hooks, detectLanguage } from './platform.js?v=20261117145507';
-import { AudioManager } from './audio.js?v=20261117145507';
+import { platform, hooks, detectLanguage } from './platform.js?v=20261117162020';
+import { AudioManager } from './audio.js?v=20261117162020';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
   buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
   ELEMENTS, ARENAS, arenaIndex, arenaTwist, unitValue, coinUnits, enemyBudget, mercy,
-} from './data.js?v=20261117145507';
-import { isProc, procFlying, procBig, buildCreature } from './creatures.js?v=20261117145507';
-import { THEMES, themeIndex, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261117145507';
+} from './data.js?v=20261117162020';
+import { isProc, procFlying, procBig, buildCreature } from './creatures.js?v=20261117162020';
+import { icon, applyIcons } from './icons.js?v=20261117162020';
+import { THEMES, themeIndex, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261117162020';
 
 // ============================================================ Helpers
 const $ = (id) => document.getElementById(id);
@@ -40,8 +41,14 @@ function updateTweens(dt) {
     const t = tweens[i];
     t.time += dt;
     const k = Math.min(1, t.time / t.duration);
-    t.fn(k);
-    if (k >= 1) { tweens.splice(i, 1); if (t.done) t.done(); }
+    try {
+      t.fn(k);
+      if (k >= 1) { tweens.splice(i, 1); if (t.done) t.done(); }
+    } catch (e) {
+      console.warn('tween error', e);
+      tweens.splice(i, 1);
+      if (t.done) { try { t.done(); } catch {} }
+    }
   }
 }
 const wait = (s) => new Promise((r) => tween(s, () => {}, r));
@@ -159,22 +166,34 @@ function resize() {
   const dir = new THREE.Vector3(0, 0.82, 0.57).normalize();
   const corners = [];
   for (const x of [-5.2, 5.2]) for (const z of [-8, 8]) for (const y of [0, 2]) corners.push(new THREE.Vector3(x, y, z));
-  const topLimit = camera.aspect < 0.8 ? 0.6 : 0.66;
-  const bottomLimit = camera.aspect < 0.8 ? -0.5 : -0.52;
-  let d = 10;
-  for (; d < 120; d += 0.5) {
-    camera.position.copy(camTarget).addScaledVector(dir, d);
-    camera.lookAt(camTarget);
+  // Short landscape phones: buttons move to the sides, so the board gets the middle
+  const shortLand = h < 520 && w > h * 1.3;
+  document.documentElement.classList.toggle('short-land', shortLand);
+  const xLimit = shortLand ? 0.62 : 0.96;
+  const topLimit = shortLand ? 0.5 : camera.aspect < 0.8 ? 0.6 : 0.66;
+  const bottomLimit = shortLand ? -0.93 : camera.aspect < 0.8 ? -0.5 : -0.52;
+  // Closest camera that fits the field inside the free screen area.
+  // In short landscape the aim point may slide along the board to use the space best.
+  const fits = (target, d) => {
+    camera.position.copy(target).addScaledVector(dir, d);
+    camera.lookAt(target);
     camera.updateMatrixWorld();
-    let ok = true;
     for (const c of corners) {
       tmp.copy(c).project(camera);
-      if (Math.abs(tmp.x) > 0.96 || tmp.y > topLimit || tmp.y < bottomLimit) { ok = false; break; }
+      if (Math.abs(tmp.x) > xLimit || tmp.y > topLimit || tmp.y < bottomLimit) return false;
     }
-    if (ok) break;
+    return true;
+  };
+  let best = null;
+  for (const dz of shortLand ? [-3, -2.5, -2, -1.5, -1, -0.5, 0, 0.5] : [0]) {
+    const target = camTarget.clone(); target.z += dz;
+    let d = 10;
+    while (d < 120 && !fits(target, d)) d += 0.5;
+    if (!best || d < best.d) best = { d, target };
   }
+  fits(best.target, best.d);
   camBase.copy(camera.position);
-  camLook.copy(camTarget);
+  camLook.copy(best.target);
 }
 
 // ============================================================ Asset loading
@@ -952,12 +971,12 @@ const thumbImg = (model, label, sub) => {
 const GUIDE = [
   {
     title: 'MERGE TO EVOLVE',
-    art: () => `<div class="g-row">${thumbImg('Blob_PinkBlob', 'Lv 1')}<b>+</b>${thumbImg('Blob_PinkBlob', 'Lv 1')}<b>➜</b>${thumbImg('Blob_GreenBlob', 'Lv 2')}</div>`,
+    art: () => `<div class="g-row">${thumbImg('Blob_PinkBlob', 'Lv 1')}<b>+</b>${thumbImg('Blob_PinkBlob', 'Lv 1')}<b>${icon('arrow')}</b>${thumbImg('Blob_GreenBlob', 'Lv 2')}</div>`,
     text: 'Drag a monster onto the <b>SAME</b> monster to merge them. Each level is about <b>twice as strong</b>!',
   },
   {
     title: 'BUILD YOUR ARMY',
-    art: () => `<div class="g-row">${thumbImg('Big_Orc', '👊 BRAWLER', 'goes in FRONT')}${thumbImg('Flying_Dragon', '🪽 FLYER', 'stays BEHIND')}</div>`,
+    art: () => `<div class="g-row">${thumbImg('Big_Orc', icon('sword') + ' BRAWLER', 'goes in FRONT')}${thumbImg('Flying_Dragon', icon('wing') + ' FLYER', 'stays BEHIND')}</div>`,
     text: '<b>Brawlers</b> hit up close: put them in front. <b>Flyers</b> shoot from far: keep them safe at the back. Drag monsters to move them.',
   },
   {
@@ -967,18 +986,18 @@ const GUIDE = [
   },
   {
     title: 'ELEMENT ENEMIES',
-    art: () => `<div class="g-elems">${Object.values(ELEMENTS).map((e) => `<div class="g-elem" style="--c:${e.css}"><em>${e.icon}</em><div><b>${e.name}</b>${e.short}</div></div>`).join('')}<div class="g-elem" style="--c:#ff6ad8"><em>🌌</em><div><b>COSMIC</b>All of them!</div></div></div>`,
+    art: () => `<div class="g-elems">${Object.values(ELEMENTS).map((e) => `<div class="g-elem" style="--c:${e.css}"><em>${icon(e.icon)}</em><div><b>${e.name}</b>${e.short}</div></div>`).join('')}<div class="g-elem" style="--c:#ff6ad8"><em>${icon('cosmic')}</em><div><b>COSMIC</b>All of them!</div></div></div>`,
     text: 'Enemies with a <b>glowing ring</b> have element powers. Take them out first!',
   },
   {
     title: 'SECRETS & TIPS',
     art: () => `<div class="g-tips">
       <div class="g-tip"><em><span class="g-q">?</span></em>Hidden enemy level. Be ready!</div>
-      <div class="g-tip"><em>🗑️</em>Drag to the bin to sell</div>
-      <div class="g-tip"><em>🎁</em>Free monster every level</div>
-      <div class="g-tip"><em>💀</em>Boss every 10 levels</div>
-      <div class="g-tip"><em>📦</em>Treasure every 5 levels</div>
-      <div class="g-tip"><em>🗺️</em>New arena every 10 levels</div></div>`,
+      <div class="g-tip"><em>${icon('trash')}</em>Drag to the bin to sell</div>
+      <div class="g-tip"><em>${icon('gift')}</em>Free monster every level</div>
+      <div class="g-tip"><em>${icon('skull')}</em>Boss every 10 levels</div>
+      <div class="g-tip"><em>${icon('chest')}</em>Treasure every 5 levels</div>
+      <div class="g-tip"><em>${icon('map')}</em>New arena every 10 levels</div></div>`,
     text: 'From level 15 the <b>ENEMY power</b> can be <b>???</b>. Trust your army!',
   },
 ];
@@ -1016,14 +1035,14 @@ async function maybeElementCard(L) {
   save.elemSeen[key] = true;
   persist();
   const e = key === 'cosmic'
-    ? { name: 'COSMIC', icon: '🌌', css: '#ff6ad8', desc: 'COSMIC enemies can have ANY element power!', tip: 'Watch the ring colors and use everything you learned.' }
+    ? { name: 'COSMIC', icon: 'cosmic', css: '#ff6ad8', desc: 'COSMIC enemies can have ANY element power!', tip: 'Watch the ring colors and use everything you learned.' }
     : ELEMENTS[key];
   const card = $('elemCard');
   card.style.setProperty('--c', e.css);
-  $('elemIcon').textContent = e.icon;
+  $('elemIcon').innerHTML = icon(e.icon);
   $('elemName').textContent = e.name;
   $('elemDesc').textContent = e.desc;
-  $('elemTip').textContent = '💡 ' + e.tip;
+  $('elemTip').innerHTML = icon('bulb') + ' ' + e.tip;
   audio.play('levelup', { volume: 0.6, vary: 0 });
   showScreen('elemCard', true);
   await new Promise((r) => { elemCardDone = r; });
@@ -1040,7 +1059,7 @@ async function arenaIntro() {
   el.style.animation = 'none'; void el.offsetWidth; el.style.animation = '';
   audio.play('bell', { volume: 0.7, vary: 0 });
   camZoom = { pos: new THREE.Vector3(9, 12, 14), look: new THREE.Vector3(0, 0, -2), k: 0 };
-  tween(0.9, (k) => { camZoom.k = Math.sin(k * Math.PI * 0.5); });
+  tween(0.9, (k) => { if (camZoom) camZoom.k = Math.sin(k * Math.PI * 0.5); });
   await wait(2.2);
   tween(0.6, (k) => { if (camZoom) camZoom.k = 1 - easeOutCubic(k); }, () => { camZoom = null; });
   await wait(0.5);
@@ -1050,7 +1069,7 @@ async function arenaIntro() {
 async function bossIntro(boss) {
   audio.play('bell', { volume: 0.9, vary: 0 });
   camZoom = { pos: new THREE.Vector3(0, 6, 4), look: new THREE.Vector3(0, 2, -4), k: 0 };
-  tween(0.6, (k) => { camZoom.k = easeOutCubic(k); });
+  tween(0.6, (k) => { if (camZoom) camZoom.k = easeOutCubic(k); });
   boss.group.scale.setScalar(0.2);
   tween(0.6, (k) => boss.group.scale.setScalar(lerp(0.2, 1, easeOutBack(k))));
   shake = 0.5;
@@ -1059,14 +1078,14 @@ async function bossIntro(boss) {
   el.classList.remove('hidden');
   el.style.animation = 'none'; void el.offsetWidth; el.style.animation = '';
   await wait(1.8);
-  tween(0.6, (k) => { camZoom.k = 1 - easeOutCubic(k); }, () => { camZoom = null; });
+  tween(0.6, (k) => { if (camZoom) camZoom.k = 1 - easeOutCubic(k); }, () => { camZoom = null; });
   setTimeout(() => el.classList.add('hidden'), 700);
 }
 
 function maybeHint() {
   const hint = $('hint');
   if (save.level === 1 && !hintShown) {
-    hint.textContent = '👆 Drag a monster onto the SAME monster to MERGE!';
+    hint.innerHTML = icon('hand') + ' Drag a monster onto the SAME monster to MERGE!';
     hint.classList.remove('hidden');
   } else if (save.level === 2 && !hintShown) {
     hint.textContent = 'Buy more monsters, merge them, then tap FIGHT!';
@@ -1081,7 +1100,7 @@ function updateLevelUI() {
   const start = Math.floor((save.level - 1) / 10) * 10 + 1;
   for (let l = start; l < start + 10; l++) {
     const i = document.createElement('i');
-    if (l % 10 === 0) { i.className = 'boss'; i.textContent = '💀'; }
+    if (l % 10 === 0) { i.className = 'boss'; i.innerHTML = icon('skull'); }
     else if (l % 5 === 0) i.className = 'chest';
     if (l < save.level) i.classList.add('done');
     if (l === save.level) i.classList.add('now');
@@ -1177,7 +1196,7 @@ async function discover(type, tier, unit, celebrate) {
   if (!celebrate || tier < 2) return;
   timeScale = 0.3;
   camZoom = { pos: unit.group.position.clone().add(new THREE.Vector3(0, 6.5, 8.5)), look: unit.group.position.clone().setY(1), k: 0 };
-  tween(0.35, (k) => { camZoom.k = easeOutCubic(k); });
+  tween(0.35, (k) => { if (camZoom) camZoom.k = easeOutCubic(k); });
   const info = tierInfo(type, tier);
   $('newMonImg').src = await thumbnail(info.model, AURA_COLORS[tier]);
   $('newMonName').textContent = info.name;
@@ -1601,7 +1620,10 @@ async function endBattle(won) {
       'Sell weak monsters to make room for bigger merges.',
     ]);
     pendingReward = coins;
-    $('bonusBtn').classList.toggle('hidden', !platform.hasRewarded);
+    // One comeback offer per defeat: a bonus monster, or after 2 failed tries a level skip
+    const stuck = save.foe && save.foe.level === save.level && save.foe.losses >= 1;
+    $('bonusBtn').classList.toggle('hidden', !platform.hasRewarded || stuck);
+    $('skipBtn').classList.toggle('hidden', !platform.hasRewarded || !stuck);
     showScreen('lose', true);
   }
 }
@@ -1622,7 +1644,7 @@ async function restoreArmy(board) {
   updatePower();
 }
 
-async function afterResult(won, coins) {
+async function afterResult(won, coins, skipped = false) {
   showScreen('win', false); showScreen('lose', false);
   save.coins += coins;
   bumpCoins();
@@ -1634,12 +1656,13 @@ async function afterResult(won, coins) {
   if (won) platform.sendScore(prevLevel);
   await restoreArmy(battleBoard);
   // Treasure chest every 5 levels
-  if (won && prevLevel % 5 === 0) {
+  if (won && !skipped && prevLevel % 5 === 0) {
     await chestSequence(prevLevel);
   }
   // Midgame ad between levels. CrazyGames and Playgama pace these themselves, other platforms every 3 fights.
   // Never straight after a rewarded ad (platform rule: no rewarded + midgame in the same break).
-  const recentReward = performance.now() - lastRewardedAt < 90000;
+  // On Playgama the Bridge alone decides the timing (its config holds the delays).
+  const recentReward = platform.noMidAfterReward && performance.now() - lastRewardedAt < 90000;
   if (!recentReward && (platform.adCapped || save.levelsSinceAd >= 3)) {
     save.levelsSinceAd = 0;
     await platform.midgameAd();
@@ -1684,7 +1707,7 @@ async function chestSequence(level) {
     $('chestHint').classList.remove('hidden');
   });
   camZoom = { pos: new THREE.Vector3(0, 7, 8), look: new THREE.Vector3(0, 0.8, 0), k: 0 };
-  tween(0.6, (k) => { camZoom.k = easeOutCubic(k); });
+  tween(0.6, (k) => { if (camZoom) camZoom.k = easeOutCubic(k); });
   await new Promise((r) => { chest.resolve = r; });
 }
 
@@ -1854,6 +1877,18 @@ click('bonusBtn', async () => {
   pendingBonus = true;
   afterResult(false, pendingReward);
 });
+click('skipBtn', async () => {
+  const ok = await watchRewarded('skip_level');
+  if (!ok) return;
+  showBanner('LEVEL SKIPPED!', 'gold');
+  afterResult(true, pendingReward, true);
+});
+click('dailyDoubleBtn', async () => {
+  const ok = await watchRewarded('double_daily');
+  if (!ok) return;
+  dailyAmount *= 2;
+  $('dailyBtn').click();
+});
 click('chestDoubleBtn', async () => {
   const ok = await watchRewarded('double_treasure');
   if (!ok) return;
@@ -1866,7 +1901,7 @@ click('retryBtn', () => afterResult(false, pendingReward));
 click('newMonBtn', () => {
   showScreen('newMon', false);
   timeScale = 1;
-  if (camZoom) tween(0.4, (k) => { camZoom.k = 1 - k; }, () => { camZoom = null; });
+  if (camZoom) tween(0.4, (k) => { if (camZoom) camZoom.k = 1 - k; }, () => { camZoom = null; });
 });
 click('chestBtn', () => collectChest());
 click('dailyBtn', () => {
@@ -2064,9 +2099,11 @@ function frame() {
 // ============================================================ Boot
 let dailyAmount = 0;
 async function boot() {
+  applyIcons();
   resize();
   platform.firstFrameReady();
   const sdk = platform.init();
+  if (platform.waitForSdk) await sdk;
   let done = 0;
   const total = 12;
   const tick = () => { done++; const pct = Math.min(100, (100 * done) / total); $('loadBar').style.width = pct + '%'; platform.loadingProgress && platform.loadingProgress(pct); };
@@ -2113,6 +2150,7 @@ async function boot() {
     if (save.level > 1 || save.lastDaily) {
       $('dailyDay').textContent = `Day ${save.streak}`;
       $('dailyCoins').textContent = formatNum(dailyAmount);
+      $('dailyDoubleBtn').classList.toggle('hidden', !platform.hasRewarded);
       showScreen('daily', true);
     } else save.lastDaily = today();
   }
@@ -2231,7 +2269,7 @@ if (platform.name === 'local') {
       const [a, b] = list;
       if (!a || !b) return 'no pair';
       const hand = document.createElement('div');
-      hand.className = 'demo-hand'; hand.textContent = '👆';
+      hand.className = 'demo-hand'; hand.innerHTML = icon('hand');
       document.body.appendChild(hand);
       const start = a.group.position.clone();
       const end = b.group.position.clone();

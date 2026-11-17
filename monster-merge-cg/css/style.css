@@ -16,7 +16,7 @@
 html, body {
   margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
   background: #8fd3ff; color: #fff; font-family: var(--font);
-  user-select: none; -webkit-user-select: none; touch-action: none; overscroll-behavior: none;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; overscroll-behavior: none;
 }
 #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
 .hidden { display: none !important; }
@@ -338,3 +338,40 @@ html, body {
 .g-skip { top: 12px; right: 10px; width: 30px; height: 30px; font-size: 14px; z-index: 2; }
 #elemCard .panel { width: min(340px, 100%); }
 #elemCard .ribbon { font-size: clamp(17px, 5.4vw, 24px); white-space: nowrap; }
+
+/* ---------- SVG icons ---------- */
+.ico { width: 1em; height: 1em; display: inline-block; vertical-align: -0.15em; overflow: visible; }
+i[data-ico] { font-style: normal; display: inline-flex; }
+.round-btn i[data-ico] .ico { width: 1.25em; height: 1.25em; }
+.stars .ico { filter: drop-shadow(0 3px 0 #c47f00); }
+.road i.boss { display: flex; align-items: center; justify-content: center; }
+.road i.boss .ico { width: 14px; height: 14px; }
+.e-icon .ico { width: 64px; height: 64px; }
+.e-tip .ico { width: 20px; height: 20px; vertical-align: -4px; }
+.g-row > b .ico { width: 34px; height: 34px; }
+.g-mon span .ico { width: 14px; height: 14px; vertical-align: -2px; }
+.btn i[data-ico] { vertical-align: -3px; }
+.g-skip i[data-ico] .ico { width: 14px; height: 14px; }
+.hint .ico { width: 22px; height: 22px; vertical-align: -5px; }
+
+.buy-ico .ico { width: 30px; height: 30px; }
+/* ---------- Short landscape phones: controls on the sides ---------- */
+.short-land .level-title { font-size: 17px; }
+.short-land .round-btn { width: 38px; height: 38px; font-size: 17px; }
+.short-land .coins { font-size: 16px; padding: 4px 10px 4px 6px; }
+.short-land .road i { width: 10px; height: 10px; }
+.short-land .road i.boss { width: 14px; height: 14px; }
+.short-land .power { top: calc(max(6px, env(safe-area-inset-top)) + 46px); transform: translateX(-50%) scale(.85); transform-origin: top center; }
+.short-land .bottom-row {
+  width: 100%; display: grid; grid-template-columns: 116px 1fr 150px; grid-template-rows: auto auto; gap: 8px; align-items: end;
+}
+.short-land #buyMelee { grid-column: 1; grid-row: 1; }
+.short-land #buyRanged { grid-column: 1; grid-row: 2; }
+.short-land .fight-btn { grid-column: 3; grid-row: 2; font-size: 24px; padding: 16px 6px; }
+.short-land .buy-btn { padding: 4px 6px 6px; flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 2px 6px; }
+.short-land .buy-ico .ico { width: 22px; height: 22px; }
+.short-land .buy-name { font-size: 12px; }
+.short-land .buy-price { font-size: 15px; }
+.short-land .free-btn { left: auto; right: max(10px, env(safe-area-inset-right)); top: 26%; }
+.short-land .hint { bottom: 10px; font-size: 13px; max-width: 44vw; padding: 6px 10px; }
+.short-land .hint .ico { width: 18px; height: 18px; }
