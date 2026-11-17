@@ -22,3 +22,5 @@ MUSIC
 ENGINE
   three.js - https://threejs.org - MIT License
   meshoptimizer decoder - MIT License
+
+Playgama Bridge SDK (Playgama build only) - LGPL-3.0 - https://github.com/Playgama/bridge

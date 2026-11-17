@@ -5,15 +5,15 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { platform, hooks, detectLanguage } from './platform.js?v=20261117131236';
-import { AudioManager } from './audio.js?v=20261117131236';
+import { platform, hooks, detectLanguage } from './platform.js?v=20261117145507';
+import { AudioManager } from './audio.js?v=20261117145507';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
   buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
   ELEMENTS, ARENAS, arenaIndex, arenaTwist, unitValue, coinUnits, enemyBudget, mercy,
-} from './data.js?v=20261117131236';
-import { isProc, procFlying, procBig, buildCreature } from './creatures.js?v=20261117131236';
-import { THEMES, themeIndex, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261117131236';
+} from './data.js?v=20261117145507';
+import { isProc, procFlying, procBig, buildCreature } from './creatures.js?v=20261117145507';
+import { THEMES, themeIndex, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261117145507';
 
 // ============================================================ Helpers
 const $ = (id) => document.getElementById(id);
@@ -1601,6 +1601,7 @@ async function endBattle(won) {
       'Sell weak monsters to make room for bigger merges.',
     ]);
     pendingReward = coins;
+    $('bonusBtn').classList.toggle('hidden', !platform.hasRewarded);
     showScreen('lose', true);
   }
 }
@@ -1636,11 +1637,32 @@ async function afterResult(won, coins) {
   if (won && prevLevel % 5 === 0) {
     await chestSequence(prevLevel);
   }
-  if (save.levelsSinceAd >= 3) {
+  // Midgame ad between levels. CrazyGames and Playgama pace these themselves, other platforms every 3 fights.
+  // Never straight after a rewarded ad (platform rule: no rewarded + midgame in the same break).
+  const recentReward = performance.now() - lastRewardedAt < 90000;
+  if (!recentReward && (platform.adCapped || save.levelsSinceAd >= 3)) {
     save.levelsSinceAd = 0;
     await platform.midgameAd();
   }
   await setupLevel();
+  // Bonus monster from the Defeat-screen ad
+  if (pendingBonus) { pendingBonus = false; await giveFreeMonster(); }
+}
+let lastRewardedAt = -1e9;
+let pendingBonus = false;
+// Every rewarded ad goes through here so we know when the last one played
+async function watchRewarded(id) {
+  const ok = await platform.rewardedAd(id);
+  if (ok) lastRewardedAt = performance.now();
+  else showBanner('NO AD RIGHT NOW', 'red');
+  return ok;
+}
+async function giveFreeMonster() {
+  const tier = Math.max(1, Math.max(save.discovered.melee || 1, save.discovered.ranged || 1) - 2);
+  const type = Math.random() < 0.5 ? 'melee' : 'ranged';
+  if (emptyPlayerCells().length) await buy(type, true, tier);
+  else { save.coins += sellValue(type, tier, save.buys[type]) * 2; bumpCoins(); showBanner('BOARD FULL: BONUS COINS!', 'gold'); }
+  updateShopUI(); updatePower(); persist();
 }
 
 // ============================================================ Treasure chest
@@ -1695,6 +1717,7 @@ async function tapChest() {
   $('chestCoins').textContent = formatNum(coins);
   $('chestExtra').textContent = cells.length ? `+ FREE ${tierInfo(freeType, freeTier).name.toUpperCase()}!` : '';
   await wait(1.0);
+  $('chestDoubleBtn').classList.toggle('hidden', !platform.hasRewarded);
   showScreen('chestWin', true);
   chest.reward = { coins, freeTier, freeType, cells: cells.length };
   chest.open = open;
@@ -1815,17 +1838,28 @@ click('buyMelee', () => buy('melee'));
 click('buyRanged', () => buy('ranged'));
 click('fightBtn', () => { battleBoard = savedBoard(); save.board = battleBoard; persist(); startBattle(); });
 click('freeBtn', async () => {
-  const ok = await platform.rewardedAd('free_monster');
+  const ok = await watchRewarded('free_monster');
   if (!ok) return;
   save.freeUsedLevel = save.level;
-  const tier = Math.max(1, Math.max(save.discovered.melee || 1, save.discovered.ranged || 1) - 2);
-  await buy(Math.random() < 0.5 ? 'melee' : 'ranged', true, tier);
-  updateShopUI();
+  await giveFreeMonster();
 });
 click('tripleBtn', async () => {
-  const ok = await platform.rewardedAd('triple_coins');
+  const ok = await watchRewarded('triple_coins');
   if (!ok) return;
   afterResult(true, pendingReward * 3);
+});
+click('bonusBtn', async () => {
+  const ok = await watchRewarded('retry_bonus');
+  if (!ok) return;
+  pendingBonus = true;
+  afterResult(false, pendingReward);
+});
+click('chestDoubleBtn', async () => {
+  const ok = await watchRewarded('double_treasure');
+  if (!ok) return;
+  if (chest && chest.reward) chest.reward.coins *= 2;
+  showBanner('DOUBLE TREASURE!', 'gold');
+  collectChest();
 });
 click('claimBtn', () => afterResult(true, pendingReward));
 click('retryBtn', () => afterResult(false, pendingReward));
@@ -2035,7 +2069,7 @@ async function boot() {
   const sdk = platform.init();
   let done = 0;
   const total = 12;
-  const tick = () => { done++; $('loadBar').style.width = Math.min(100, (100 * done) / total) + '%'; };
+  const tick = () => { done++; const pct = Math.min(100, (100 * done) / total); $('loadBar').style.width = pct + '%'; platform.loadingProgress && platform.loadingProgress(pct); };
 
   const sfx = ['hit1', 'hit2', 'hit_heavy', 'die', 'orb_hit', 'bell', 'slam', 'crit', 'place', 'coins', 'coins2', 'fight', 'shoot', 'chest_latch', 'chest_open', 'book', 'pickup', 'click', 'merge', 'levelup', 'denied', 'lose', 'win', 'drop'];
   const sfxJob = Promise.all(sfx.map((n) => audio.load(n, `assets/audio/${n}.mp3`))).then(tick);

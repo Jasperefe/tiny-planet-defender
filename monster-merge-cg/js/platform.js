@@ -48,6 +48,7 @@ const local = {
 const crazygames = {
   name: 'crazygames',
   hasRewarded: true,
+  adCapped: true, // the SDK limits midgame ads itself (max 1 every 3 minutes)
   sdk: null,
   playing: false,
   async init() {
@@ -243,7 +244,88 @@ const playhop = {
   isAudioEnabled() { return true; },
 };
 
-const all = { local, crazygames, youtube, playhop };
+// ---------------------------------------------------------------- Playgama (Playgama Bridge SDK, bundled in the zip)
+const playgama = {
+  name: 'playgama',
+  hasRewarded: true,
+  adCapped: true, // Bridge enforces the minimum delay between interstitials itself
+  bridge: null,
+  playing: false,
+  lang: 'en',
+  pending: null,
+  async init() {
+    const b = window.bridge;
+    if (!b) return;
+    try {
+      await withTimeout(b.initialize(), 8000, null);
+      this.bridge = b;
+      try { this.lang = (b.platform.language || 'en').slice(0, 2); } catch {}
+      this.hasRewarded = !!b.advertisement.isRewardedSupported;
+      b.platform.on('pause_state_changed', (isPaused) => (isPaused ? hooks.onPause() : hooks.onResume()));
+      b.platform.on('audio_state_changed', (on) => hooks.onAudioChange(on));
+      // One listener for all ad states; the open request (if any) handles them
+      b.advertisement.on('interstitial_state_changed', (st) => this.pending && this.pending.kind === 'i' && this.pending.on(st));
+      b.advertisement.on('rewarded_state_changed', (st) => this.pending && this.pending.kind === 'r' && this.pending.on(st));
+    } catch (e) { console.warn('Playgama Bridge init failed', e); this.bridge = null; }
+  },
+  loadingProgress(p) { try { this.bridge && this.bridge.platform.setLoadingProgress(Math.round(p)); } catch {} },
+  firstFrameReady() {},
+  gameReady() { try { this.bridge && this.bridge.platform.sendMessage('game_ready'); } catch {} },
+  gameplayStart() {
+    if (this.playing) return;
+    this.playing = true;
+    try { this.bridge && this.bridge.platform.sendMessage('gameplay_started'); } catch {}
+  },
+  gameplayStop() {
+    if (!this.playing) return;
+    this.playing = false;
+    try { this.bridge && this.bridge.platform.sendMessage('gameplay_stopped'); } catch {}
+  },
+  happyTime() {},
+  async loadData() {
+    if (this.bridge) {
+      try {
+        const d = await withTimeout(this.bridge.storage.get(SAVE_KEY), 5000, null);
+        const obj = typeof d === 'string' ? JSON.parse(d) : d;
+        if (obj && obj.level) return obj;
+      } catch {}
+    }
+    return local.loadData();
+  },
+  saveData(obj) {
+    local.saveData(obj);
+    if (this.bridge) { try { this.bridge.storage.set(SAVE_KEY, JSON.stringify(obj)).catch(() => {}); } catch {} }
+  },
+  // Wraps a Bridge ad call into a promise; resolves true only when a rewarded ad paid out
+  showAd(kind, placement) {
+    return new Promise((resolve) => {
+      if (!this.bridge) { resolve(false); return; }
+      let opened = false, rewarded = false, done = false;
+      const finish = (v) => { if (done) return; done = true; this.pending = null; if (opened) hooks.onAdEnd(); resolve(v); };
+      this.pending = {
+        kind,
+        on: (st) => {
+          if (st === 'opened' && !opened) { opened = true; hooks.onAdStart(); }
+          else if (st === 'rewarded') rewarded = true;
+          else if (st === 'closed') finish(kind === 'r' ? rewarded : true);
+          else if (st === 'failed') finish(false);
+        },
+      };
+      // Safety net if the platform never answers
+      setTimeout(() => { if (!opened) finish(false); }, 12000);
+      try {
+        if (kind === 'r') this.bridge.advertisement.showRewarded(placement);
+        else this.bridge.advertisement.showInterstitial(placement);
+      } catch { finish(false); }
+    });
+  },
+  rewardedAd(id = 'reward') { return this.showAd('r', id); },
+  async midgameAd() { await this.showAd('i', 'level_break'); },
+  sendScore(level) { try { this.bridge && this.bridge.platform.sendMessage('level_completed', { level }); } catch {} },
+  isAudioEnabled() { try { return this.bridge ? this.bridge.platform.isAudioEnabled !== false : true; } catch { return true; } },
+};
+
+const all = { local, crazygames, youtube, playhop, playgama };
 export const platform = all[window.PLATFORM] || local;
 export function detectLanguage() {
   if (platform.lang) return platform.lang;

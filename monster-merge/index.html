@@ -7,7 +7,7 @@
 <title>Monster Merge Arena</title>
 <script>window.PLATFORM = "local";</script>
 <script>window.PLATFORM = window.PLATFORM || 'local';</script>
-<link rel="stylesheet" href="css/style.css?v=20261117131236">
+<link rel="stylesheet" href="css/style.css?v=20261117145507">
 </head>
 <body>
 <canvas id="game"></canvas>
@@ -82,6 +82,7 @@
     <div class="ribbon red">DEFEAT</div>
     <p class="lose-tip" id="loseTip">Merge more monsters to get stronger!</p>
     <div class="reward"><span class="coin-icon big"></span><span id="loseCoins">0</span></div>
+    <button id="bonusBtn" class="btn green hidden"><span class="ad-tag">AD</span> RETRY + BONUS MONSTER</button>
     <button id="retryBtn" class="btn blue">TRY AGAIN</button>
   </div>
 </div>
@@ -104,6 +105,7 @@
     <div class="ribbon gold">TREASURE!</div>
     <div class="reward"><span class="coin-icon big"></span><span id="chestCoins">0</span></div>
     <div class="chest-extra" id="chestExtra"></div>
+    <button id="chestDoubleBtn" class="btn green hidden"><span class="ad-tag">AD</span> DOUBLE TREASURE</button>
     <button id="chestBtn" class="btn blue">COLLECT</button>
   </div>
 </div>
@@ -199,6 +201,6 @@
 <script type="importmap">
 { "imports": { "three": "./lib/three/three.module.js", "three/addons/": "./lib/three/addons/" } }
 </script>
-<script type="module" src="js/main.js?v=20261117131236"></script>
+<script type="module" src="js/main.js?v=20261117145507"></script>
 </body>
 </html>
