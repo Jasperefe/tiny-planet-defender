@@ -378,3 +378,18 @@ i[data-ico] { font-style: normal; display: inline-flex; }
 /* AD labels must be clearly visible on every rewarded button */
 .ad-tag { background: #5a2fd0 !important; color: #fff !important; border: 2px solid #fff; font-size: 12px; padding: 2px 7px; letter-spacing: 1px; }
 .free-btn .ad-tag { margin-top: 4px !important; font-size: 13px; }
+
+.signin-btn {
+  display: flex; align-items: center; gap: 4px; height: 46px; padding: 0 10px; border-radius: 14px; cursor: pointer;
+  font-family: var(--font); font-weight: 900; font-size: 13px; color: #1b4f9a;
+  background: linear-gradient(#fff, #d8efff); border: 3px solid #fff; box-shadow: 0 4px 0 rgba(0,0,0,.2);
+}
+.signin-btn .ico { width: 22px; height: 22px; }
+.signin-btn:active { transform: translateY(2px); }
+@media (max-width: 420px) { .signin-btn { height: 40px; padding: 0 7px; font-size: 11px; } .signin-btn span { max-width: 44px; line-height: 1; } }
+.short-land .signin-btn { height: 38px; }
+.top-left { flex-direction: column; align-items: flex-start; }
+.signin-btn { height: 34px; font-size: 12px; padding: 0 9px; border-radius: 12px; }
+.signin-btn .ico { width: 18px; height: 18px; }
+@media (max-width: 420px) { .signin-btn { height: 32px; padding: 0 7px; font-size: 11px; } .signin-btn span { max-width: none; } }
+.short-land .signin-btn { height: 30px; }

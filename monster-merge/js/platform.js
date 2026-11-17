@@ -341,6 +341,15 @@ const playgama = {
   sendScore(level) { try { this.bridge && this.bridge.platform.sendMessage('level_completed', { level }); } catch {} },
   isAudioEnabled() { try { return this.bridge ? this.bridge.platform.isAudioEnabled !== false : true; } catch { return true; } },
   waitForSdk: true, // nothing loads before the Bridge is ready
+  // Optional sign-in (never forced): only shown where the platform supports it
+  canSignIn() {
+    try { return !!(this.bridge && this.bridge.player.isAuthorizationSupported && !this.bridge.player.isAuthorized); } catch { return false; }
+  },
+  async signIn() {
+    if (!this.bridge) return false;
+    try { await this.bridge.player.authorize(); } catch { return false; }
+    try { return !!this.bridge.player.isAuthorized; } catch { return false; }
+  },
 };
 
 const all = { local, crazygames, youtube, playhop, playgama };

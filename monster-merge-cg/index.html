@@ -8,7 +8,7 @@
 <script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
 <script>window.PLATFORM = "crazygames";</script>
 <script>window.PLATFORM = window.PLATFORM || 'local';</script>
-<link rel="stylesheet" href="css/style.css?v=20261117170831">
+<link rel="stylesheet" href="css/style.css?v=20261117171009">
 </head>
 <body>
 <canvas id="game"></canvas>
@@ -25,6 +25,7 @@
 <div id="top" class="hidden">
   <div class="top-left">
     <button id="bookBtn" class="round-btn" aria-label="Monster book"><i data-ico="book"></i></button>
+    <button id="signInBtn" class="signin-btn hidden" aria-label="Sign in"><i data-ico="user"></i><span>SIGN IN</span></button>
   </div>
   <div class="level-box">
     <div class="level-title">LEVEL <span id="levelNum">1</span></div>
@@ -140,6 +141,7 @@
     <div class="ribbon blue">SETTINGS</div>
     <button id="sfxBtn" class="btn ghost">SOUND: ON</button>
     <button id="musicBtn" class="btn ghost">MUSIC: ON</button>
+    <button id="signInBtn2" class="btn ghost hidden"><i data-ico="user"></i> SIGN IN (SAVE ONLINE)</button>
     <button id="guideBtn" class="btn ghost"><i data-ico="question"></i> HOW TO PLAY</button>
     <button id="creditsBtn" class="btn ghost">CREDITS</button>
     <button id="restartLevelBtn" class="btn ghost"><i data-ico="restart"></i> RESTART LEVEL</button>
@@ -204,6 +206,6 @@
 <script type="importmap">
 { "imports": { "three": "./lib/three/three.module.js", "three/addons/": "./lib/three/addons/" } }
 </script>
-<script type="module" src="js/main.js?v=20261117170831"></script>
+<script type="module" src="js/main.js?v=20261117171009"></script>
 </body>
 </html>

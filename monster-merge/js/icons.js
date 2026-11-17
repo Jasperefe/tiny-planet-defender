@@ -21,6 +21,7 @@ const PATHS = {
   bulb: `<path d="M32 6c-11 0-19 8-19 18 0 7 4 11 7 14 2 2 3 5 3 8h18c0-3 1-6 3-8 3-3 7-7 7-14 0-10-8-18-19-18z" fill="#ffe066" ${O}/><rect x="23" y="46" width="18" height="10" rx="3" fill="#b8c4d8" ${O}/><path d="M26 22c2-4 6-6 10-5" stroke="#fff" stroke-width="4" stroke-linecap="round" fill="none"/>`,
   hand: `<path d="M24 32V10a5 5 0 0 1 10 0v18l4-1c3 0 5 1 6 3l4-1c3 0 5 2 5 5v12c0 9-7 14-15 14h-6c-6 0-9-3-12-8l-8-12c-2-3 0-6 3-6 2 0 4 1 5 3z" fill="#ffd6b0" ${O}/>`,
   star: `<path d="M32 4l8 17 18 2-13 13 4 19-17-9-17 9 4-19L6 23l18-2z" fill="#ffd23a" ${O}/>`,
+  user: `<circle cx="32" cy="22" r="12" fill="#6ccbff" ${O}/><path d="M10 56c0-12 10-20 22-20s22 8 22 20z" fill="#2a86e8" ${O}/>`,
   // Elements
   poison: `<path d="M32 6c10 14 18 24 18 34a18 18 0 0 1-36 0c0-10 8-20 18-34z" fill="#7dff5a" ${O}/><circle cx="25" cy="40" r="4" fill="#2b1d4f"/><circle cx="39" cy="40" r="4" fill="#2b1d4f"/><path d="M25 50c4 3 10 3 14 0" stroke="#2b1d4f" stroke-width="3" fill="none" stroke-linecap="round"/><circle cx="26" cy="22" r="3" fill="#fff" opacity=".8"/>`,
   swift: `<path d="M38 4L12 36h16l-6 24 30-36H36z" fill="#ffd23a" ${O}/>`,

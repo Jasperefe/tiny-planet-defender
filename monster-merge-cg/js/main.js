@@ -5,16 +5,16 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { platform, hooks, detectLanguage } from './platform.js?v=20261117170831';
-import { AudioManager } from './audio.js?v=20261117170831';
+import { platform, hooks, detectLanguage } from './platform.js?v=20261117171009';
+import { AudioManager } from './audio.js?v=20261117171009';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
   buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
   ELEMENTS, ARENAS, arenaIndex, arenaTwist, unitValue, coinUnits, enemyBudget, mercy,
-} from './data.js?v=20261117170831';
-import { isProc, procFlying, procBig, buildCreature } from './creatures.js?v=20261117170831';
-import { icon, applyIcons } from './icons.js?v=20261117170831';
-import { THEMES, themeIndex, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261117170831';
+} from './data.js?v=20261117171009';
+import { isProc, procFlying, procBig, buildCreature } from './creatures.js?v=20261117171009';
+import { icon, applyIcons } from './icons.js?v=20261117171009';
+import { THEMES, themeIndex, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261117171009';
 
 // ============================================================ Helpers
 const $ = (id) => document.getElementById(id);
@@ -1917,6 +1917,24 @@ click('settingsBtn', () => { showScreen('settings', true); setPaused(true); });
 click('settingsClose', () => { showScreen('settings', false); setPaused(false); });
 click('sfxBtn', () => { save.sfx = !save.sfx; applySettings(); persist(); });
 click('musicBtn', () => { save.music = !save.music; applySettings(); persist(); });
+// Optional sign-in (Playgama): saves progress to the player's account; the game never asks by itself
+function updateSignIn() {
+  const can = !!(platform.canSignIn && platform.canSignIn());
+  $('signInBtn').classList.toggle('hidden', !can);
+  $('signInBtn2').classList.toggle('hidden', !can);
+}
+async function doSignIn() {
+  const ok = await platform.signIn();
+  updateSignIn();
+  if (!ok) return;
+  showBanner('SIGNED IN!', 'gold');
+  // Progress from another device wins if it is further along
+  const cloud = await platform.loadData();
+  if (cloud && cloud.level > save.level) { location.reload(); return; }
+  persist();
+}
+click('signInBtn', () => doSignIn());
+click('signInBtn2', () => { showScreen('settings', false); setPaused(false); doSignIn(); });
 click('guideBtn', async () => { showScreen('settings', false); await openGuide(); setPaused(false); });
 click('guideNext', () => { if (guidePage < GUIDE.length - 1) { guidePage++; renderGuide(); } else closeGuide(); });
 click('guideBack', () => { if (guidePage > 0) { guidePage--; renderGuide(); } });
@@ -2139,6 +2157,7 @@ async function boot() {
   audio.setBlocked(!platform.isAudioEnabled());
   document.documentElement.lang = ['en'].includes(detectLanguage()) ? detectLanguage() : 'en';
   platform.gameReady();
+  updateSignIn();
   await setupLevel();
 
   // Daily gift
