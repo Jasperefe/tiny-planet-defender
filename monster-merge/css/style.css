@@ -272,3 +272,25 @@ html, body {
 .capture #hint, .capture #freeBtn { display: none !important; }
 .demo-hand { position: fixed; left: 0; top: 0; z-index: 50; font-size: 64px; pointer-events: none; margin: -6px 0 0 -18px; filter: drop-shadow(0 4px 4px rgba(0,0,0,.4)); }
 .clean #top, .clean #bottom, .clean #powerBar, .clean #fx, .clean .banner, .clean .screen, .clean .boss-name, .clean .demo-hand { visibility: hidden !important; }
+
+/* ---------- Arenas, elements, mystery power ---------- */
+.arena-intro {
+  position: fixed; left: 50%; top: 24%; transform: translateX(-50%); z-index: 21; pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; gap: 6px; width: min(92vw, 560px); text-align: center;
+  animation: arenaIn 2.9s ease-out forwards;
+}
+.arena-intro small { font-size: 15px; font-weight: 900; letter-spacing: 4px; color: #fff; background: rgba(40,20,80,.7); padding: 4px 12px; border-radius: 10px; }
+.arena-intro b { font-size: clamp(30px, 8.5vw, 54px); font-weight: 900; color: #ffdd57; letter-spacing: 2px; line-height: 1.05;
+  text-shadow: 0 4px 0 rgba(0,0,0,.4), 3px 0 0 rgba(0,0,0,.2), -3px 0 0 rgba(0,0,0,.2); }
+.arena-intro span { font-size: clamp(15px, 4vw, 20px); font-weight: 900; color: #fff; background: rgba(40,20,80,.72); border: 3px solid #fff;
+  border-radius: 14px; padding: 8px 14px; text-shadow: 0 2px 0 rgba(0,0,0,.35); }
+@keyframes arenaIn { 0% { opacity: 0; transform: translateX(-50%) scale(.6); } 12% { opacity: 1; transform: translateX(-50%) scale(1.08); }
+  20% { transform: translateX(-50%) scale(1); } 85% { opacity: 1; } 100% { opacity: 0; transform: translateX(-50%) scale(1); } }
+.flash { position: fixed; inset: 0; z-index: 25; background: #fff; opacity: 0; pointer-events: none; }
+.flash.go { animation: flash .7s ease-out; }
+@keyframes flash { 0% { opacity: 0; } 25% { opacity: 1; } 100% { opacity: 0; } }
+.power.mystery .foe b { color: #d8b0ff; animation: mystery 1.2s ease-in-out infinite; }
+@keyframes mystery { 50% { opacity: .55; } }
+.dmg.burn { color: #ff9a3a; font-size: 18px; }
+.dmg.poison { color: #8aff5a; font-size: 18px; }
+.clean .arena-intro { visibility: hidden !important; }

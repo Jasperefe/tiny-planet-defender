@@ -109,13 +109,56 @@ export const expected = [];
   }
 })();
 
-// Difficulty multiplier: gentle start, fair middle, tougher late game.
-function difficulty(level) {
-  if (level <= 2) return 0.5;
-  if (level <= 10) return 0.65 + (level - 3) * 0.045;
-  if (level <= 30) return 1.0 + (level - 10) * 0.004;
-  return Math.min(1.22, 1.08 + (level - 30) * 0.0025);
+// ---------------------------------------------------------------- Arenas & elements
+// Every 10 levels the arena changes. Each arena has its own creatures, an element twist and a boss.
+export const ELEMENTS = {
+  poison: { name: 'POISON', color: 0x6dff4a, css: '#7dff5a', desc: 'POISON enemies leave toxic damage over time!' },
+  swift: { name: 'SWIFT', color: 0xffd23a, css: '#ffd23a', desc: 'SWIFT enemies run and strike much faster!' },
+  ice: { name: 'ICE', color: 0x8ad8ff, css: '#8ad8ff', desc: 'ICE enemies are tough and freeze your monsters!' },
+  fire: { name: 'FIRE', color: 0xff6a1f, css: '#ff8a3a', desc: 'FIRE enemies set your monsters ablaze!' },
+  shadow: { name: 'SHADOW', color: 0xb070ff, css: '#c08aff', desc: 'SHADOW enemies hit harder and steal life!' },
+};
+export const ELEMENT_KEYS = Object.keys(ELEMENTS);
+export const ARENAS = [
+  { element: 'poison', melee: ['P_Slime_Green', 'P_Golem_Moss'], ranged: ['P_Bat_Eye'], boss: { model: 'Big_MushroomKing', name: 'MUSHROOM KING', element: 'poison' } },
+  { element: 'swift', melee: ['P_Cactus', 'P_Golem_Sand'], ranged: ['P_Bat_Sand'], boss: { model: 'P_Golem_Sand', name: 'SANDSTONE COLOSSUS', element: 'swift' } },
+  { element: 'ice', melee: ['P_Snowman', 'P_Golem_Ice'], ranged: ['P_Bat_Frost'], boss: { model: 'Big_Dino', name: 'FROST TYRANT', element: 'ice' } },
+  { element: 'fire', melee: ['P_Golem_Lava', 'P_Slime_Lava'], ranged: ['P_Wisp_Fire'], boss: { model: 'P_Golem_Lava', name: 'MAGMA TITAN', element: 'fire' } },
+  { element: 'shadow', melee: ['P_Slime_Shadow'], ranged: ['P_Pumpkin', 'P_Bat_Eye'], boss: { model: 'Big_Orc_Skull', name: 'SKULL WARLORD', element: 'shadow' } },
+  { element: 'cosmic', melee: ['P_Golem_Crystal'], ranged: ['P_Wisp_Crystal'], boss: { model: 'Flying_Alpaking_Evolved', name: 'SKY EMPEROR', flying: true, element: 'cosmic' } },
+];
+export const arenaIndex = (level) => Math.floor((level - 1) / 10) % ARENAS.length;
+export function arenaTwist(level) {
+  const a = ARENAS[arenaIndex(level)];
+  if (a.element === 'cosmic') return 'COSMIC enemies wield EVERY element!';
+  return ELEMENTS[a.element].desc;
 }
+
+// How strong a board is, in tier-1 units
+export const unitValue = (tier) => Math.pow(2, tier - 1);
+export function coinUnits(coins, buys) {
+  // How many tier-1 monsters these coins could buy (alternating lines)
+  let n = 0, c = coins, bm = buys.melee || 0, br = buys.ranged || 0;
+  for (let i = 0; i < 400; i++) {
+    const useM = buyPrice(bm) <= buyPrice(br);
+    const p = buyPrice(useM ? bm : br);
+    if (c < p) break;
+    c -= p; n++;
+    if (useM) bm++; else br++;
+  }
+  return n;
+}
+
+// Enemy army size: it grows with YOUR army, so maxing out never makes it easy.
+// Level 1 is a fair fight, from level 3 the enemy is a little stronger than you.
+export function enemyBudget(level, armyUnits, spareCoinUnits) {
+  const curve = expected[Math.min(level + 1, 1001)];
+  const k = [0, 0.8, 0.95, 1.0, 1.04][level] || Math.min(1.32, 1.06 + level * 0.004);
+  const potential = armyUnits + spareCoinUnits * 0.75;
+  return Math.max(2, Math.round(Math.max(curve * (level <= 3 ? 0.55 : 0.8), potential * k)));
+}
+// After each lost try the same enemy gets a bit weaker, so every level is passable
+export const mercy = (losses) => Math.pow(0.92, Math.min(losses, 8));
 
 // Seeded random so a level always has the same army
 function rng(seed) {
@@ -127,19 +170,24 @@ function rng(seed) {
 }
 
 // Build an enemy army: up to 15 units on a 5x3 grid.
-export function buildLevel(level) {
+export function buildLevel(level, budgetIn) {
   const r = rng(level * 7 + 3);
   const isBoss = level % 10 === 0;
-  // Army before this level, plus what the player could buy with the previous win
-  let budget = Math.max(2, Math.round(expected[Math.min(level + 1, 1001)] * difficulty(level)));
-  if (level === 1) budget = 2;
-  if (level === 2) budget = 4;
+  const arena = ARENAS[arenaIndex(level)];
+  const cycle = Math.floor((level - 1) / (10 * ARENAS.length));
+  const inArena = (level - 1) % 10;
+  // Share of enemies with an element (none in the first 3 levels)
+  const elemShare = level <= 3 ? 0 : Math.min(0.8, 0.25 + inArena * 0.06 + cycle * 0.2);
+  // Elemental enemies are stronger, so the raw budget is trimmed a little
+  let budget = Math.max(2, Math.round((budgetIn || 2) / (1 + 0.06 * elemShare)));
   const units = [];
   let boss = null;
   if (isBoss) {
-    const b = BOSSES[(level / 10 - 1) % BOSSES.length];
-    const bossBudget = Math.round(budget * 0.65);
-    boss = { ...b, budget: bossBudget };
+    const b = arena.boss;
+    const bossBudget = Math.round(budget * 0.6);
+    let element = b.element;
+    if (element === 'cosmic') element = ELEMENT_KEYS[Math.floor(r() * ELEMENT_KEYS.length)];
+    boss = { ...b, element, budget: bossBudget };
     budget -= bossBudget;
   }
   // Binary split of the budget into tiers, then merge down to fit the grid
@@ -149,9 +197,8 @@ export function buildLevel(level) {
     const v = 1 << (t - 1);
     while (rem >= v && tiers.length < 40) { tiers.push(t); rem -= v; }
   }
-  // Spread out: split the strongest units while there is room and it adds variety
   const maxCells = isBoss ? 9 : 15;
-  const wanted = Math.min(maxCells, 2 + Math.floor(level / 3) + Math.floor(r() * 3));
+  const wanted = Math.min(maxCells, 3 + Math.floor(level / 3) + Math.floor(r() * 3));
   tiers.sort((a, b) => b - a);
   while (tiers.length < wanted && tiers[0] > 1) {
     const t = tiers.shift();
@@ -164,13 +211,18 @@ export function buildLevel(level) {
     tiers.push(Math.max(a, b) + (a === b ? 1 : 0));
   }
   tiers.sort((a, b) => b - a);
-  // Place: melee in front rows, ranged at the back
-  const cells = [];
-  for (let row = 0; row < 3; row++) for (let col = 0; col < 5; col++) cells.push({ row, col });
-  const rangedShare = level < 4 ? 0 : 0.35;
+  const rangedShare = level < 3 ? 0.15 : 0.4;
+  const hideChance = level < 6 ? 0 : Math.min(0.55, 0.2 + (level - 6) * 0.012);
   for (const t of tiers) {
     const type = r() < rangedShare ? 'ranged' : 'melee';
-    units.push({ type, tier: Math.min(t, MAX_TIER), seed: Math.floor(r() * 100) });
+    const tier = Math.min(t, MAX_TIER);
+    const seed = Math.floor(r() * 100);
+    // Arena creatures mixed with the classic enemy roster
+    const roster = arena[type];
+    const model = level > 1 && r() < 0.6 ? roster[seed % roster.length] : enemyModel(type, tier, seed);
+    let element = null;
+    if (r() < elemShare) element = arena.element === 'cosmic' ? ELEMENT_KEYS[Math.floor(r() * ELEMENT_KEYS.length)] : arena.element;
+    units.push({ type, tier, seed, model, element, hidden: r() < hideChance });
   }
   // Order: front row (row 0 = closest to player) gets melee first
   units.sort((a, b) => (a.type === b.type ? b.tier - a.tier : a.type === 'melee' ? -1 : 1));
@@ -178,14 +230,15 @@ export function buildLevel(level) {
   const slots = [];
   for (let row = 0; row < 3; row++) for (const col of order) slots.push({ row, col });
   if (isBoss) {
-    // Boss takes the center of the front rows
     const taken = new Set(['0,2', '1,2', '0,1', '0,3', '1,1', '1,3']);
     const free = slots.filter((s) => !taken.has(`${s.row},${s.col}`));
     units.forEach((u, i) => Object.assign(u, free[i]));
   } else {
     units.forEach((u, i) => Object.assign(u, slots[i]));
   }
-  return { level, units, boss };
+  // From level 15 the enemy's total power is sometimes a mystery, from 30 always
+  const hidePower = level >= 30 || (level >= 15 && r() < 0.5);
+  return { level, units, boss, hidePower };
 }
 
 // Boss stats from its budget (in tier-1 melee units)

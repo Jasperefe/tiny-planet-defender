@@ -5,12 +5,15 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { platform, hooks, detectLanguage } from './platform.js?v=20261113121231';
-import { AudioManager } from './audio.js?v=20261113121231';
+import { platform, hooks, detectLanguage } from './platform.js?v=20261117121019';
+import { AudioManager } from './audio.js?v=20261117121019';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
   buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
-} from './data.js?v=20261113121231';
+  ELEMENTS, ARENAS, arenaIndex, arenaTwist, unitValue, coinUnits, enemyBudget, mercy,
+} from './data.js?v=20261117121019';
+import { isProc, procFlying, procBig, buildCreature } from './creatures.js?v=20261117121019';
+import { THEMES, themeIndex, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261117121019';
 
 // ============================================================ Helpers
 const $ = (id) => document.getElementById(id);
@@ -23,6 +26,7 @@ const easeOutBack = (t) => { const c = 1.7; return 1 + (c + 1) * Math.pow(t - 1,
 const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
 const tmp = new THREE.Vector3();
 const tmp2 = new THREE.Vector3();
+const tmpC = new THREE.Color();
 
 // Simple tween system
 const tweens = [];
@@ -69,6 +73,7 @@ const save = {
   board: [{ type: 'melee', tier: 1, row: 0, col: 2 }, { type: 'melee', tier: 1, row: 0, col: 1 }],
   discovered: { melee: 1, ranged: 0 },
   sfx: true, music: true, lastDaily: '', streak: 0, levelsSinceAd: 0, freeUsedLevel: 0,
+  foe: null, // { level, budget, losses } the enemy army stays the same on retries
 };
 let state = 'loading'; // loading | prep | battle | result | chest
 let paused = false;
@@ -99,23 +104,39 @@ const camBase = new THREE.Vector3();
 const camLook = new THREE.Vector3();
 let camZoom = null; // { pos, look, k }
 
-// Sky dome
+// Sky dome (gradient, optional stars) and a moon for night arenas
+const skyMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  uniforms: { top: { value: new THREE.Color(0x3fa9ff) }, mid: { value: new THREE.Color(0xa8e2ff) }, bottom: { value: new THREE.Color(0xe9f8ff) }, stars: { value: 0 }, uTime: { value: 0 } },
+  vertexShader: 'varying vec3 vP; void main(){ vP = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `uniform vec3 top; uniform vec3 mid; uniform vec3 bottom; uniform float stars; uniform float uTime; varying vec3 vP;
+    void main(){
+      float h = vP.y; vec3 c = h > 0.0 ? mix(mid, top, pow(h, 0.7)) : mix(mid, bottom, pow(-h, 0.6));
+      if (stars > 0.0 && h > 0.02) {
+        vec3 q = floor(vP * 160.0);
+        float r = fract(sin(dot(q, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+        float tw = 0.6 + 0.4 * sin(uTime * 2.0 + r * 60.0);
+        c += vec3(step(0.9965, r) * smoothstep(0.02, 0.35, h) * tw * stars);
+      }
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+});
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(300, 32, 16), skyMat));
+const moon = new THREE.Group();
 {
-  const sky = new THREE.Mesh(
-    new THREE.SphereGeometry(300, 32, 16),
-    new THREE.ShaderMaterial({
-      side: THREE.BackSide, depthWrite: false, fog: false,
-      uniforms: { top: { value: new THREE.Color(0x3fa9ff) }, mid: { value: new THREE.Color(0xa8e2ff) }, bottom: { value: new THREE.Color(0xe9f8ff) } },
-      vertexShader: 'varying vec3 vP; void main(){ vP = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
-      fragmentShader: `uniform vec3 top; uniform vec3 mid; uniform vec3 bottom; varying vec3 vP;
-        void main(){ float h = vP.y; vec3 c = h > 0.0 ? mix(mid, top, pow(h, 0.7)) : mix(mid, bottom, pow(-h, 0.6)); gl_FragColor = vec4(c, 1.0); }`,
-    })
-  );
-  scene.add(sky);
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(9, 32), new THREE.MeshBasicMaterial({ color: 0xfff4d6, fog: false }));
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xfff0d0, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.6, fog: false }));
+  halo.scale.setScalar(55);
+  moon.add(halo, disc);
+  moon.position.set(-90, 95, -230);
+  moon.lookAt(0, 0, 0);
+  moon.visible = false;
+  scene.add(moon);
 }
 
 // Lights
-scene.add(new THREE.HemisphereLight(0xe4f4ff, 0x7a8f4c, 1.5));
+const hemi = new THREE.HemisphereLight(0xe4f4ff, 0x7a8f4c, 1.5);
+scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff0d6, 2.6);
 sun.position.set(-14, 28, 16);
 sun.castShadow = true;
@@ -162,7 +183,9 @@ const templates = new Map(); // name -> Promise<{ scene, animations, info }>
 
 function loadModel(path) {
   if (templates.has(path)) return templates.get(path);
-  const p = loader.loadAsync(path).then((g) => {
+  // Procedural monsters are built in code instead of loaded
+  const source = path.startsWith('proc:') ? Promise.resolve(buildCreature(path.slice(5))) : loader.loadAsync(path);
+  const p = source.then((g) => {
     g.scene.traverse((o) => {
       if (o.isMesh) {
         o.castShadow = true;
@@ -191,7 +214,7 @@ function loadModel(path) {
   templates.set(path, p);
   return p;
 }
-const monsterPath = (name) => `assets/models/monsters/${name}.glb`;
+const monsterPath = (name) => (isProc(name) ? `proc:${name}` : `assets/models/monsters/${name}.glb`);
 const envPath = (name) => `assets/models/env/${name}.glb`;
 
 async function envObject(name, height, opts = {}) {
@@ -222,6 +245,7 @@ async function buildArena() {
   for (const m of baseMats) {
     const a = m.clone(); const b = m.clone();
     b.color.multiplyScalar(0.9);
+    b.userData.factor = 0.9;
     tintA.set(m, a); tintB.set(m, b);
     tileMaterials.push(a, b);
   }
@@ -278,51 +302,6 @@ async function buildArena() {
     }
   }
 
-  // Decorations
-  const deco = async (name, h, x, z, rotY = rand(0, TAU), opts) => {
-    const o = await envObject(name, h, opts);
-    o.position.set(x, 0, z);
-    o.rotation.y = rotY;
-    arena.add(o);
-    return o;
-  };
-  const jobs = [];
-  // Trees on the back corners and sides
-  jobs.push(deco('pf_Tree_Fruit', 5.2, -6.4, -9.2));
-  jobs.push(deco('pf_Tree', 4.6, 6.3, -9.0));
-  jobs.push(deco('n_Pine_1', 5.6, -6.8, -4.5));
-  jobs.push(deco('n_CommonTree_1', 5.0, 6.8, -5.2));
-  jobs.push(deco('pf_Tree', 3.6, -6.7, 6.8));
-  jobs.push(deco('n_Pine_1', 4.2, 6.7, 7.4));
-  // Banners: red for the enemy, blue for you
-  jobs.push(deco('p_Banner_1', 2.6, -3.6, -9.4, 0));
-  jobs.push(deco('p_Banner_1', 2.6, 3.6, -9.4, 0));
-  jobs.push(deco('p_Banner_2', 2.4, -6.4, 2.2, Math.PI / 2));
-  jobs.push(deco('p_Banner_2', 2.4, 6.4, 2.2, -Math.PI / 2));
-  // Props
-  jobs.push(deco('p_Barrel', 1.0, -6.2, -1.4));
-  jobs.push(deco('p_Barrel', 0.9, -6.6, -0.4));
-  jobs.push(deco('p_Crate_Wooden', 1.0, 6.3, -1.0, 0.3));
-  jobs.push(deco('p_WeaponStand', 1.3, 6.4, 4.6, -Math.PI / 2));
-  jobs.push(deco('p_Torch_Metal', 1.2, -6.2, 4.4));
-  jobs.push(deco('p_Torch_Metal', 1.2, 6.2, 0.9));
-  // Plants and rocks
-  jobs.push(deco('n_Rock_Medium_1', 1.4, -6.3, -6.8));
-  jobs.push(deco('n_Rock_Medium_3', 1.2, 6.5, 2.6));
-  jobs.push(deco('n_Bush_Common_Flowers', 1.3, -6.4, 8.6, 0, { noShadow: true }));
-  jobs.push(deco('n_Bush_Common_Flowers', 1.2, 6.6, -7.2, 0, { noShadow: true }));
-  jobs.push(deco('n_Flower_3_Group', 1.0, -6.0, 0.8, 0, { noShadow: true }));
-  jobs.push(deco('n_Flower_4_Group', 1.1, 6.0, 6.0, 0, { noShadow: true }));
-  jobs.push(deco('n_Flower_4_Group', 1.0, -2.0, -9.4, 0, { noShadow: true }));
-  jobs.push(deco('n_Flower_3_Group', 0.9, 1.8, -9.5, 0, { noShadow: true }));
-  jobs.push(deco('n_Grass_Wispy_Tall', 0.9, -5.6, -3.0, 0, { noShadow: true }));
-  jobs.push(deco('n_Grass_Wispy_Tall', 0.9, 5.7, 3.6, 0, { noShadow: true }));
-  jobs.push(deco('n_Mushroom_Common', 0.6, -5.8, 6.2, 0, { noShadow: true }));
-  jobs.push(deco('n_Mushroom_Common', 0.5, 5.9, -3.4, 0, { noShadow: true }));
-  // Fence along the back edge
-  for (const x of [-4, 0, 4]) jobs.push(deco('pf_Fence_Middle', 1.1, x, -9.6, 0));
-  await Promise.all(jobs);
-
   // Enemy castle on its own floating island behind the arena
   const castleIsland = new THREE.Group();
   const isl = rockT.scene.clone(true);
@@ -334,7 +313,7 @@ async function buildArena() {
   tower.position.y = 0.2;
   castleIsland.add(tower);
   castleIsland.position.set(0, -2, -22);
-  scene.add(castleIsland);
+  envRoot.add(castleIsland);
 
   // Distant floating islands with trees
   const addIsland = async (x, y, z, s2, tree) => {
@@ -346,7 +325,7 @@ async function buildArena() {
     g.add(r);
     if (tree) { const t = await envObject(tree, 4 * s2 * 0.6); t.position.y = 0.1; g.add(t); }
     g.position.set(x, y, z);
-    scene.add(g);
+    envRoot.add(g);
     clouds.push({ obj: g, base: y, speed: 0, bob: rand(0, TAU) });
   };
   await Promise.all([
@@ -360,14 +339,89 @@ async function buildArena() {
   const cloudNames = ['pf_Cloud_1', 'pf_Cloud_2', 'pf_Cloud_3'];
   for (let i = 0; i < 12; i++) {
     const c = await envObject(pick(cloudNames), rand(1.6, 3), { noShadow: true });
-    c.traverse((o) => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.setRGB(1, 1, 1); o.receiveShadow = false; } });
+    c.traverse((o) => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.setRGB(1, 1, 1); o.material.userData.skip = true; cloudMats.push(o.material); o.receiveShadow = false; } });
     const below = i < 7;
     c.position.set(rand(-45, 45), below ? rand(-18, -9) : rand(4, 10), below ? rand(-40, 10) : rand(-60, -30));
     if (below && Math.abs(c.position.x) < 12) c.position.x += Math.sign(c.position.x || 1) * 14;
     c.scale.multiplyScalar(rand(1, 1.8));
-    scene.add(c);
+    envRoot.add(c);
     clouds.push({ obj: c, base: c.position.y, speed: rand(0.4, 1.1), bob: rand(0, TAU) });
   }
+}
+
+// ============================================================ Arena themes
+const envRoot = new THREE.Group();
+scene.add(envRoot);
+const decorGroup = new THREE.Group();
+scene.add(decorGroup);
+const cloudMats = [];
+let themeNow = -1;
+let emberSources = [];
+const floatProps = [];
+// Lava sea far below the island (Magma Core)
+const lavaSeaU = { uTime: { value: 0 } };
+animatedUniforms.push(lavaSeaU);
+const lavaSea = new THREE.Mesh(new THREE.PlaneGeometry(700, 700), lavaMaterial(lavaSeaU, true));
+lavaSea.rotation.x = -Math.PI / 2;
+lavaSea.position.y = -34;
+lavaSea.visible = false;
+scene.add(lavaSea);
+
+// Recolor every environment material by name for the current theme
+function recolor(root, theme) {
+  const seen = new Set();
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    const m = o.material;
+    if (!m || seen.has(m) || !m.color || !m.name || m.userData.skip) return;
+    seen.add(m);
+    if (!m.userData.orig) { m.userData.orig = m.color.clone(); m.userData.origMap = m.map || null; }
+    const rule = theme.recolor[m.name];
+    const hex = Array.isArray(rule) ? rule[0] : rule;
+    if (hex !== undefined) {
+      m.color.setHex(hex).multiplyScalar(m.userData.factor || 1);
+      const flat = (m.name.startsWith('Leaves') && m.userData.origMap) || (Array.isArray(rule) && rule[1] === 'flat');
+      if (flat !== !m.map) { m.map = flat ? null : m.userData.origMap; m.needsUpdate = true; }
+    } else {
+      m.color.copy(m.userData.orig);
+      if (m.map !== m.userData.origMap) { m.map = m.userData.origMap; m.needsUpdate = true; }
+    }
+  });
+}
+
+async function buildDecor(theme) {
+  while (decorGroup.children.length) decorGroup.remove(decorGroup.children[0]);
+  emberSources = [];
+  floatProps.length = 0;
+  await Promise.all(theme.decor.map(async ([name, h, x, z, rot, noShadow]) => {
+    const o = isProp(name) ? buildProp(name, h) : await envObject(name, h, { noShadow: !!noShadow });
+    o.position.x = x; o.position.z = z;
+    o.rotation.y = rot === undefined ? rand(0, TAU) : rot;
+    if (o.userData.float) { o.position.y = rand(3, 8); floatProps.push({ obj: o, base: o.position.y, bob: rand(0, TAU) }); }
+    if (name === '@lava') emberSources.push(new THREE.Vector3(x, 0.15, z));
+    if (o.userData.ember) emberSources.push(new THREE.Vector3(x, h * o.userData.ember[1], z));
+    decorGroup.add(o);
+  }));
+}
+
+async function applyTheme(i) {
+  if (i === themeNow) return;
+  themeNow = i;
+  const th = THEMES[i];
+  skyMat.uniforms.top.value.setHex(th.sky[0]);
+  skyMat.uniforms.mid.value.setHex(th.sky[1]);
+  skyMat.uniforms.bottom.value.setHex(th.sky[2]);
+  skyMat.uniforms.stars.value = th.stars || 0;
+  scene.fog.color.setHex(th.fog);
+  hemi.color.setHex(th.hemi[0]); hemi.groundColor.setHex(th.hemi[1]); hemi.intensity = th.hemi[2];
+  sun.color.setHex(th.sun[0]); sun.intensity = th.sun[1];
+  renderer.toneMappingExposure = th.exposure;
+  moon.visible = !!th.moon;
+  if (th.moon) moon.children[1].material.color.setHex(th.moon);
+  lavaSea.visible = !!th.lavaSea;
+  for (const m of cloudMats) m.color.setHex(th.cloud);
+  await buildDecor(th);
+  recolor(arena, th); recolor(envRoot, th); recolor(decorGroup, th);
 }
 
 // Soft rounded-square texture for cell markers
@@ -466,7 +520,24 @@ const C = {
   white: new THREE.Color(1, 1, 1),
   smoke: new THREE.Color(0.95, 0.95, 0.95),
   dust: new THREE.Color(0.85, 0.78, 0.62),
+  fire: new THREE.Color(2.4, 0.9, 0.2),
+  ice: new THREE.Color(0.85, 0.95, 1.0),
+  shadow: new THREE.Color(0.35, 0.15, 0.55),
 };
+// Little particles that show an enemy's element
+function elementParticle(u) {
+  const p = tmp.copy(u.group.position);
+  p.x += rand(-0.4, 0.4) * u.radius * 2; p.z += rand(-0.4, 0.4) * u.radius * 2;
+  p.y = rand(0.2, u.height) + (u.flying ? 0.7 : 0);
+  switch (u.element) {
+    case 'fire': glow.spawn(p, tmp2.set(rand(-0.2, 0.2), rand(1.5, 2.5), rand(-0.2, 0.2)), C.fire, rand(0.25, 0.4), 0.6, -1); break;
+    case 'poison': glow.spawn(p, tmp2.set(0, rand(0.6, 1.2), 0), C.green, rand(0.2, 0.32), 0.9, -0.5); break;
+    case 'ice': glow.spawn(p, tmp2.set(rand(-0.3, 0.3), 0.3, rand(-0.3, 0.3)), C.blue, rand(0.15, 0.25), 0.8, 0); break;
+    case 'shadow': puff.spawn(p, tmp2.set(rand(-0.2, 0.2), rand(0.8, 1.4), rand(-0.2, 0.2)), C.shadow, rand(0.35, 0.6), 0.8, -0.5); break;
+    case 'swift': glow.spawn(p.setY(rand(0.1, 0.6)), tmp2.set(0, 0.2, 0), C.gold, rand(0.18, 0.28), 0.4, 0); break;
+  }
+}
+
 function burst(p, color, n = 20, speed = 5, size = 0.5, life = 0.6, up = 2) {
   for (let i = 0; i < n; i++) {
     const a = Math.random() * TAU, e = Math.random();
@@ -586,18 +657,18 @@ function findClip(anims, names) {
 
 // Number badge texture per tier and team
 const badgeCache = new Map();
-function badgeTexture(tier, team) {
-  const key = tier + team;
+function badgeTexture(tier, team, element, hidden) {
+  const key = `${tier}${team}${element || ''}${hidden ? 'h' : ''}`;
   if (badgeCache.has(key)) return badgeCache.get(key);
   const c = document.createElement('canvas');
   c.width = c.height = 64;
   const g = c.getContext('2d');
-  g.beginPath(); g.arc(32, 32, 28, 0, TAU);
-  g.fillStyle = team === 'player' ? (tier >= 9 ? '#ffb400' : '#2a86e8') : '#e0344a';
+  g.beginPath(); g.arc(32, 32, 27, 0, TAU);
+  g.fillStyle = hidden ? '#4a2a7a' : team === 'player' ? (tier >= 9 ? '#ffb400' : '#2a86e8') : '#e0344a';
   g.fill();
-  g.lineWidth = 5; g.strokeStyle = '#fff'; g.stroke();
+  g.lineWidth = element ? 7 : 5; g.strokeStyle = element ? ELEMENTS[element].css : '#fff'; g.stroke();
   g.fillStyle = '#fff'; g.font = '900 34px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillText(String(tier), 32, 34);
+  g.fillText(hidden ? '?' : String(tier), 32, 34);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   badgeCache.set(key, t);
@@ -624,7 +695,7 @@ class Unit {
   async init() {
     const t = await loadModel(monsterPath(this.model));
     const obj = cloneSkinned(t.scene);
-    const height = this.height * (this.model.startsWith('Big_') ? 1.3 : 1);
+    const height = this.height * (this.model.startsWith('Big_') || procBig(this.model) ? 1.3 : 1);
     this.height = height;
     const s = height / Math.max(t.size.y, t.size.x * 0.72);
     obj.scale.setScalar(s);
@@ -640,10 +711,27 @@ class Unit {
         this.mats.push(o.material);
       }
     });
-    if (this.aura) {
-      for (const m of this.mats) { m.emissive = new THREE.Color(this.aura); m.emissiveIntensity = 0.35; }
-      this.baseEmissive = 0.35;
-    } else this.baseEmissive = 0;
+    // Resting glow of every material (procedural eyes, lava cracks, auras, elements)
+    const elem = this.element ? new THREE.Color(ELEMENTS[this.element].color) : null;
+    for (const m of this.mats) {
+      if (!m.emissive) { if (elem && m.color && !m.isMeshBasicMaterial) m.color.lerp(elem, 0.28); continue; } // unlit parts (pumpkin face)
+      const base = m.emissive.clone().multiplyScalar(m.emissiveIntensity ?? 1);
+      if (this.aura) base.add(new THREE.Color(this.aura).multiplyScalar(0.35));
+      if (elem && m.color) { m.color.lerp(elem, 0.28); base.add(elem.clone().multiplyScalar(0.16)); }
+      m.baseEm = base;
+      m.emissive.copy(base);
+      m.emissiveIntensity = 1;
+    }
+    // Element ring on the ground
+    if (elem) {
+      this.elemRing = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: elem.clone().multiplyScalar(1.6), transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending }));
+      this.elemRing.position.y = 0.05;
+      this.elemRing.scale.setScalar(this.radius * 2.1 + 0.3);
+      this.elemRing.renderOrder = 3;
+      this.group.add(this.elemRing);
+      this.elemColor = elem.clone().multiplyScalar(1.8);
+      this.fxTimer = rand(0, 0.2);
+    }
     // Animations
     this.mixer = new THREE.AnimationMixer(obj);
     const A = t.animations;
@@ -677,7 +765,7 @@ class Unit {
     this.group.add(this.hpBar);
     // Tier badge (shown while preparing)
     if (!this.isBoss) {
-      this.badge = new THREE.Sprite(new THREE.SpriteMaterial({ map: badgeTexture(this.tier, this.team), depthTest: false }));
+      this.badge = new THREE.Sprite(new THREE.SpriteMaterial({ map: badgeTexture(this.tier, this.team, this.element, this.hidden), depthTest: false }));
       this.badge.scale.setScalar(0.62);
       this.badge.position.y = height + (this.flying ? 1.05 : 0.45);
       this.badge.renderOrder = 22;
@@ -718,12 +806,22 @@ async function createUnit(opts) {
     aura = AURA_COLORS[opts.tier] || null;
     flying = opts.type === 'ranged';
   } else {
-    model = enemyModel(opts.type, opts.tier, opts.seed || 0);
-    flying = model.startsWith('Flying');
+    model = opts.model || enemyModel(opts.type, opts.tier, opts.seed || 0);
+    flying = model.startsWith('Flying') || procFlying(model);
   }
-  const stats = opts.isBoss ? bossStats(opts.budget) : unitStats(opts.type, opts.tier);
+  if (opts.isBoss && procFlying(model)) flying = true;
+  const stats = { ...(opts.isBoss ? bossStats(opts.budget) : unitStats(opts.type, opts.tier)) };
+  // Element twists change the numbers too
+  let powerMul = 1;
+  switch (opts.element) {
+    case 'swift': stats.speed *= 1.55; stats.interval *= 0.75; stats.hp = Math.round(stats.hp * 0.85); break;
+    case 'shadow': stats.dmg = Math.round(stats.dmg * 1.15); powerMul = 1.12; break;
+    case 'ice': powerMul = 1.25; break;
+    case 'fire': powerMul = 1.22; break;
+    case 'poison': powerMul = 1.2; break;
+  }
   const height = opts.isBoss ? 4.4 : unitHeight(opts.type, opts.tier) * (opts.tier > 8 ? 1 + (opts.tier - 8) * 0.12 : 1);
-  const u = new Unit({ ...opts, model, aura, flying, stats, height, maxHp: stats.hp, hp: stats.hp });
+  const u = new Unit({ ...opts, model, aura, flying, stats, height, maxHp: stats.hp, hp: stats.hp, powerMul, dots: [], slow: 0 });
   await u.init();
   u.home = cellPos(u.team, u.row, u.col);
   if (u.isBoss) u.home = new THREE.Vector3(0, 0, -4);
@@ -769,12 +867,14 @@ function savedBoard() {
 function armyPower(list) {
   // Lanchester-style strength: sqrt(total HP x total DPS)
   let hp = 0, dps = 0;
-  for (const u of list) { hp += u.stats.hp; dps += u.stats.dmg / u.stats.interval; }
+  for (const u of list) { const k = u.powerMul || 1; hp += u.stats.hp * Math.sqrt(k); dps += (u.stats.dmg / u.stats.interval) * Math.sqrt(k); }
   return Math.round(Math.sqrt(hp * dps) / 4);
 }
 function updatePower() {
   $('powerYou').textContent = formatNum(armyPower(playerUnits()));
-  $('powerFoe').textContent = formatNum(armyPower(enemyUnits()));
+  const hide = currentLevel && currentLevel.hidePower && state !== 'battle' && state !== 'result';
+  $('powerFoe').textContent = hide ? '???' : formatNum(armyPower(enemyUnits()));
+  $('powerBar').classList.toggle('mystery', !!hide);
 }
 function formatNum(n) {
   if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
@@ -796,15 +896,35 @@ function preloadPlayerTiers() {
 }
 
 // ============================================================ Level flow
+// The enemy army is sized once per level from your army and coins, then kept for retries
+function foeBudget() {
+  if (!save.foe || save.foe.level !== save.level) {
+    const army = save.board.reduce((n, b) => n + unitValue(b.tier), 0);
+    save.foe = { level: save.level, budget: enemyBudget(save.level, army, coinUnits(save.coins, save.buys)), losses: 0 };
+  }
+  return Math.max(2, Math.round(save.foe.budget * mercy(save.foe.losses)));
+}
+function currentArmy() { return buildLevel(save.level, foeBudget()); }
+
 async function setupLevel() {
   state = 'loading-level';
   // Clear enemies
   for (const u of enemyUnits()) removeUnit(u);
-  const L = buildLevel(save.level);
+  save.board = savedBoard().length ? savedBoard() : save.board;
+  const L = currentArmy();
   currentLevel = L;
-  const jobs = L.units.map((e) => createUnit({ team: 'enemy', type: e.type, tier: e.tier, row: e.row, col: e.col, seed: e.seed }));
+  // New arena every 10 levels
+  const ti = themeIndex(save.level);
+  const newArena = ti !== themeNow;
+  if (newArena) {
+    const fl = $('flash');
+    fl.classList.remove('go'); void fl.offsetWidth; fl.classList.add('go');
+    await new Promise((r) => setTimeout(r, 180));
+    await applyTheme(ti);
+  }
+  const jobs = L.units.map((e) => createUnit({ team: 'enemy', type: e.type, tier: e.tier, row: e.row, col: e.col, seed: e.seed, model: e.model, element: e.element, hidden: e.hidden }));
   let boss = null;
-  if (L.boss) jobs.push(createUnit({ team: 'enemy', type: 'melee', tier: 1, row: 1, col: 2, isBoss: true, model: L.boss.model, flying: L.boss.flying, budget: L.boss.budget }).then((b) => { boss = b; b.bossName = L.boss.name; }));
+  if (L.boss) jobs.push(createUnit({ team: 'enemy', type: 'melee', tier: 1, row: 1, col: 2, isBoss: true, model: L.boss.model, flying: L.boss.flying, budget: L.boss.budget, element: L.boss.element }).then((b) => { boss = b; b.bossName = L.boss.name; }));
   const created = await Promise.all(jobs);
   for (const u of created) { if (u && !u.isBoss) popIn(u, 0.01); }
   updateLevelUI();
@@ -813,10 +933,28 @@ async function setupLevel() {
   updateShopUI();
   setMusic();
   showBottom(true);
+  if (newArena || (save.level - 1) % 10 === 0) await arenaIntro();
   if (L.boss) await bossIntro(boss);
   else showBanner(`LEVEL ${save.level}`);
   maybeHint();
   preloadPlayerTiers();
+}
+
+// Big title card for a new arena, with its twist
+async function arenaIntro() {
+  const th = THEMES[themeIndex(save.level)];
+  const el = $('arenaIntro');
+  $('arenaName').textContent = th.name;
+  $('arenaTwist').textContent = save.level <= 3 ? 'Every fight is tough. Merge smart to survive!' : arenaTwist(save.level);
+  el.classList.remove('hidden');
+  el.style.animation = 'none'; void el.offsetWidth; el.style.animation = '';
+  audio.play('bell', { volume: 0.7, vary: 0 });
+  camZoom = { pos: new THREE.Vector3(9, 12, 14), look: new THREE.Vector3(0, 0, -2), k: 0 };
+  tween(0.9, (k) => { camZoom.k = Math.sin(k * Math.PI * 0.5); });
+  await wait(2.2);
+  tween(0.6, (k) => { if (camZoom) camZoom.k = 1 - easeOutCubic(k); }, () => { camZoom = null; });
+  await wait(0.5);
+  el.classList.add('hidden');
 }
 
 async function bossIntro(boss) {
@@ -1111,6 +1249,7 @@ function startBattle() {
     u.hpBar.visible = true;
     if (u.badge) u.badge.visible = false;
     u.setHp(u.maxHp);
+    u.dots = []; u.slow = 0;
     u.cooldown = rand(0.2, 0.6);
     u.target = null;
   }
@@ -1129,8 +1268,10 @@ function nearestFoe(u) {
 function dealDamage(attacker, target, base, isSplash = false) {
   if (!target.alive) return;
   const crit = !isSplash && Math.random() < 0.12;
-  const dmg = Math.round(base * (crit ? 2 : 1) * rand(0.9, 1.1));
+  let dmg = Math.round(base * (crit ? 2 : 1) * rand(0.9, 1.1));
+  if (target.element === 'ice') dmg = Math.round(dmg * 0.86); // icy armor
   target.setHp(target.hp - dmg);
+  applyElement(attacker, target, base, dmg);
   target.flash = 1;
   const p = target.group.position.clone().setY(target.height * 0.8 + (target.flying ? 0.6 : 0));
   floatText(p, formatNum(dmg), crit ? 'crit' : target.team === 'player' ? 'enemy' : '');
@@ -1146,6 +1287,45 @@ function dealDamage(attacker, target, base, isSplash = false) {
     target.knock.add(tmp);
   }
   if (target.hp <= 0) killUnit(target);
+}
+
+// Element effects on hit
+function applyElement(attacker, target, base, dmg) {
+  switch (attacker.element) {
+    case 'fire':
+      target.dots.push({ t: 2, dps: base * 0.42, kind: 'burn', acc: 0 });
+      break;
+    case 'poison':
+      if (target.dots.filter((d) => d.kind === 'poison').length < 3) target.dots.push({ t: 3, dps: base * 0.17, kind: 'poison', acc: 0 });
+      break;
+    case 'ice':
+      if (target.slow <= 0) burst(target.group.position.clone().setY(target.height * 0.6), C.blue, 8, 2, 0.35, 0.4, 1);
+      target.slow = 1.6;
+      break;
+    case 'shadow':
+      if (attacker.alive) {
+        attacker.setHp(attacker.hp + dmg * 0.35);
+        glow.spawn(attacker.group.position.clone().setY(attacker.height * 0.8), tmp2.set(0, 1.5, 0), C.purple, 0.5, 0.5, 0);
+      }
+      break;
+  }
+}
+// Burn and poison tick every half second
+function updateDots(u, dt) {
+  for (let i = u.dots.length - 1; i >= 0; i--) {
+    const d = u.dots[i];
+    d.t -= dt; d.acc += dt;
+    if (d.acc >= 0.5 || d.t <= 0) {
+      const dmg = Math.max(1, Math.round(d.dps * d.acc));
+      d.acc = 0;
+      u.setHp(u.hp - dmg);
+      const p = u.group.position.clone().setY(u.height * 0.85 + (u.flying ? 0.6 : 0));
+      floatText(p, formatNum(dmg), d.kind);
+      burst(p, d.kind === 'burn' ? C.fire : C.green, 5, 1.5, 0.35, 0.4, 2);
+      if (u.hp <= 0) { killUnit(u); return; }
+    }
+    if (d.t <= 0) u.dots.splice(i, 1);
+  }
 }
 
 function killUnit(u) {
@@ -1210,6 +1390,9 @@ function updateBattle(dt) {
   battleTime += dt;
   for (const u of units) {
     if (!u.alive) continue;
+    if (u.dots.length) { updateDots(u, dt); if (!u.alive) continue; }
+    const slowK = u.slow > 0 ? 0.7 : 1;
+    if (u.slow > 0) u.slow -= dt;
     if (u.hitTimer > 0) { u.hitTimer -= dt; if (u.hitTimer <= 0) u.play('idle', 0.1); }
     // Knockback slide
     if (u.knock.lengthSq() > 0.0001) {
@@ -1248,13 +1431,13 @@ function updateBattle(dt) {
     }
     if (dist > reach) {
       // Move toward the target
-      const sp = u.stats.speed * dt;
+      const sp = u.stats.speed * dt * slowK;
       u.group.position.x += (dx / dist) * sp;
       u.group.position.z += (dz / dist) * sp;
       if (u.current !== u.actions.attack || !u.current.isRunning()) u.play('move', 0.15);
       if (!u.flying && Math.random() < dt * 4) puff.spawn(tmp.copy(u.group.position).setY(0.1), tmp2.set(rand(-0.5, 0.5), 0.6, rand(-0.5, 0.5)), C.dust, 0.4, 0.4, 0);
     } else {
-      u.cooldown -= dt;
+      u.cooldown -= dt * slowK;
       if (u.cooldown <= 0) {
         u.cooldown = u.stats.interval * rand(0.92, 1.08);
         const a = u.actions.attack;
@@ -1320,10 +1503,12 @@ async function endBattle(won) {
     const coins = Math.max(5, Math.round(winCoins(save.level) * 0.3));
     $('loseCoins').textContent = formatNum(coins);
     $('loseTip').textContent = pick([
-      'Merge monsters to make them much stronger!',
+      'The enemy gets a little weaker every time you try again!',
       'Put Brawlers in front to protect your Flyers!',
-      'Compare YOUR power with the ENEMY power before you fight.',
+      'Glowing enemies have ELEMENT powers. Kill them first!',
       'Flyers at level 5+ hit several enemies at once!',
+      'A ? badge hides how strong that enemy is. Be ready!',
+      'Sell weak monsters to make room for bigger merges.',
     ]);
     pendingReward = coins;
     showScreen('lose', true);
@@ -1352,6 +1537,7 @@ async function afterResult(won, coins) {
   bumpCoins();
   const prevLevel = save.level;
   if (won) save.level++;
+  else if (save.foe && save.foe.level === save.level) save.foe.losses++;
   save.levelsSinceAd++;
   persist();
   if (won) platform.sendScore(prevLevel);
@@ -1604,7 +1790,7 @@ async function newGame() {
   Object.assign(save, {
     level: 1, coins: START_COINS, buys: { melee: 0, ranged: 0 },
     board: [{ type: 'melee', tier: 1, row: 0, col: 2 }, { type: 'melee', tier: 1, row: 0, col: 1 }],
-    discovered: { melee: 1, ranged: 0 }, levelsSinceAd: 0, freeUsedLevel: 0,
+    discovered: { melee: 1, ranged: 0 }, levelsSinceAd: 0, freeUsedLevel: 0, foe: null,
   });
   hintShown = false;
   battleBoard = save.board.slice();
@@ -1653,6 +1839,7 @@ let slowFrames = 0;
 let elapsed = 0;
 function frame() {
   if (!CAPTURE) requestAnimationFrame(frame);
+  if (window.__noRender) return;
   const now = performance.now();
   const raw = forcedDt !== null ? forcedDt : Math.min((now - last) / 1000, 0.05);
   last = now;
@@ -1682,19 +1869,32 @@ function frame() {
     if (u.flash > 0 || u.mergeGlow || u.wasGlow) {
       u.flash = Math.max(0, u.flash - dt * 6);
       const g = u.mergeGlow ? 0.35 + Math.sin(elapsed * 10) * 0.25 : 0;
+      const v = u.flash * 0.55 + g;
       for (const m of u.mats) {
-        if (!m.emissive) m.emissive = new THREE.Color();
-        const v = u.flash * 0.55 + g;
-        m.emissive.setRGB(v + (u.aura ? 0.3 : 0), v + (u.aura ? 0.25 : 0), v * (u.mergeGlow ? 0.4 : 1));
-        m.emissiveIntensity = 1;
+        if (!m.emissive) continue;
+        m.emissive.copy(m.baseEm).add(tmpC.setRGB(v, v, v * (u.mergeGlow ? 0.4 : 1)));
       }
       u.wasGlow = u.mergeGlow || u.flash > 0;
     }
     // Flyers hover
     if (u.flying) u.inner.position.y = 0.7 + Math.sin(elapsed * 2.5 + u.bob) * 0.15;
+    // Element aura: pulsing ring and particles
+    if (u.elemRing && u.alive) {
+      u.elemRing.material.opacity = 0.55 + Math.sin(elapsed * 4 + u.bob) * 0.3;
+      u.fxTimer -= raw;
+      if (u.fxTimer <= 0 && !lowQuality) {
+        u.fxTimer = 0.12;
+        elementParticle(u);
+      }
+    } else if (u.elemRing && !u.alive) u.elemRing.visible = false;
+    if (u.slow > 0 && Math.random() < raw * 6) puff.spawn(tmp.copy(u.group.position).setY(u.height * 0.7 + rand(-0.3, 0.3)), tmp2.set(rand(-0.5, 0.5), 0.4, rand(-0.5, 0.5)), C.ice, 0.3, 0.5, 0);
     // Bars face the camera
     if (u.hpBar.visible) u.hpBar.quaternion.copy(u.group.quaternion).invert().multiply(camera.quaternion);
   }
+  if (themeNow >= 0 && !lowQuality) ambientParticles(THEMES[themeNow], glow, puff, raw, emberSources);
+  skyMat.uniforms.uTime.value = elapsed;
+  for (const a of animatedUniforms) a.uTime.value = elapsed;
+  for (const f of floatProps) { f.obj.position.y = f.base + Math.sin(elapsed * 0.6 + f.bob) * 0.8; f.obj.rotation.y += raw * 0.2; }
   glow.update(dt);
   puff.update(dt);
   updateRings(dt);
@@ -1753,13 +1953,13 @@ async function boot() {
     }
     tick();
   });
-  const arenaJob = buildArena().then(tick);
+  const arenaJob = saveJob.then(() => buildArena()).then(() => applyTheme(themeIndex(save.level))).then(tick);
   await saveJob;
   // Monsters needed for the first screen
   const firstModels = new Set();
   for (const b of save.board) firstModels.add(tierInfo(b.type, b.tier).model);
-  const L = buildLevel(save.level);
-  for (const e of L.units) firstModels.add(enemyModel(e.type, e.tier, e.seed));
+  const L = currentArmy();
+  for (const e of L.units) firstModels.add(e.model);
   if (L.boss) firstModels.add(L.boss.model);
   const modelJobs = [...firstModels].map((m) => loadModel(monsterPath(m)).then(tick));
   await Promise.all([arenaJob, sfxJob, ...modelJobs]);
@@ -1821,6 +2021,69 @@ if (platform.name === 'local') {
       return { level, count, won: en === 0 && pl > 0, time: t, playerLeft: pl, enemyLeft: en, you: armyPower(board.map((b) => ({ stats: unitStats(b.type, b.tier) }))), foe: armyPower(enemyUnits()) };
     },
     camera, scene, expected,
+    // Bot that plays like a sensible player (no ads): buys with all coins, merges pairs, fights.
+    async autoplay(toLevel, opts = {}) {
+      const log = [];
+      const quickMerge = async (a, b) => { removeUnit(a); removeUnit(b); await createUnit({ team: 'player', type: b.type, tier: b.tier + 1, row: b.row, col: b.col }); };
+      const mergeAll = async () => {
+        for (let again = true; again;) {
+          again = false;
+          const list = playerUnits().filter((u) => u.alive).sort((a, b) => a.tier - b.tier);
+          for (let i = 0; i < list.length && !again; i++) for (let j = i + 1; j < list.length; j++) {
+            if (list[i].type === list[j].type && list[i].tier === list[j].tier && list[i].tier < MAX_TIER) { await quickMerge(list[i], list[j]); again = true; break; }
+          }
+        }
+      };
+      let tries = 0;
+      while (save.level <= toLevel) {
+        // Spend: keep about 40% flyers
+        for (let guard = 0; guard < 200; guard++) {
+          await mergeAll();
+          const pu = playerUnits();
+          const flyers = pu.filter((u) => u.type === 'ranged').reduce((n, u) => n + unitValue(u.tier), 0);
+          const all = pu.reduce((n, u) => n + unitValue(u.tier), 0) || 1;
+          const type = flyers / all < (opts.flyShare ?? 0.4) ? 'ranged' : 'melee';
+          if (save.coins < buyPrice(save.buys[type])) break;
+          if (!emptyPlayerCells().length) {
+            // Board full with no pairs: sell the weakest to make room
+            const weak = pu.sort((a, b) => a.tier - b.tier)[0];
+            if (!weak || weak.tier >= 6) break;
+            removeUnit(weak); save.coins += sellValue(weak.type, weak.tier, save.buys[weak.type]);
+            continue;
+          }
+          await buy(type);
+        }
+        await mergeAll();
+        for (let i = 0; i < 8; i++) this.sim(0.1);
+        battleBoard = savedBoard(); save.board = battleBoard;
+        const you = armyPower(playerUnits()), foe = armyPower(enemyUnits());
+        startBattle();
+        let t = 0;
+        while (state === 'battle' && t < 95) { this.sim(0.5); t += 0.5; }
+        const won = enemyUnits().filter((u) => u.alive).length === 0;
+        tries++;
+        log.push({ L: save.level, won, you, foe, budget: save.foe && save.foe.budget, losses: save.foe && save.foe.losses });
+        await new Promise((r) => setTimeout(r, 0));
+        showScreen('win', false); showScreen('lose', false);
+        // Same bookkeeping as afterResult (no ads, chest coins added directly)
+        const L = save.level;
+        if (won) { save.coins += winCoins(L) + (L % 5 === 0 ? winCoins(L) * 3 : 0); save.level++; }
+        else { save.coins += Math.max(5, Math.round(winCoins(L) * 0.3)); save.foe.losses++; }
+        if (tries > (opts.maxTries || 400)) break;
+        state = 'result';
+        await restoreArmy(battleBoard);
+        await this.quickSetup();
+      }
+      return log;
+    },
+    async quickSetup() {
+      for (const u of enemyUnits()) removeUnit(u);
+      const L = currentArmy();
+      currentLevel = L;
+      await Promise.all(L.units.map((e) => createUnit({ team: 'enemy', type: e.type, tier: e.tier, row: e.row, col: e.col, seed: e.seed, model: e.model, element: e.element, hidden: e.hidden })));
+      if (L.boss) await createUnit({ team: 'enemy', type: 'melee', tier: 1, row: 1, col: 2, isBoss: true, model: L.boss.model, flying: L.boss.flying, budget: L.boss.budget, element: L.boss.element });
+      state = 'prep';
+    },
     step(dt) { forcedDt = dt; frame(); forcedDt = null; },
     async setupDemo(board, level, opts = {}) {
       for (const u of [...units]) removeUnit(u);
@@ -1863,8 +2126,8 @@ if (platform.name === 'local') {
     hero(px, py, pz, lx, ly, lz) { camZoom = { pos: new THREE.Vector3(px, py, pz), look: new THREE.Vector3(lx, ly, lz), k: 1 }; },
     heroOff() { camZoom = null; },
     setCapZoom(z) { capZoom = z; },
-    cleanUnits() { for (const u of units) { u.flash = 0; u.hpBar.visible = false; if (u.badge) u.badge.visible = false; for (const m of u.mats) { m.emissive && m.emissive.setRGB(u.aura ? 0.3 : 0, u.aura ? 0.25 : 0, 0); } } },
-    get battleOver() { return state === 'result'; }, restartLevel: () => restartLevel(), newGame: () => newGame(), screenOf(u) { const v = u.group.position.clone().setY(u.height * 0.5); v.project(camera); return [(v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight]; },
+    cleanUnits() { for (const u of units) { u.flash = 0; u.hpBar.visible = false; if (u.badge) u.badge.visible = false; for (const m of u.mats) { m.emissive && m.baseEm && m.emissive.copy(m.baseEm); } } },
+    get battleOver() { return state === 'result'; }, applyTheme: (i) => applyTheme(i), arenaIntro: () => arenaIntro(), restartLevel: () => restartLevel(), newGame: () => newGame(), screenOf(u) { const v = u.group.position.clone().setY(u.height * 0.5); v.project(camera); return [(v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight]; },
   };
 }
 
