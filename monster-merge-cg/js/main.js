@@ -5,16 +5,16 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { platform, hooks, detectLanguage } from './platform.js?v=20261117162020';
-import { AudioManager } from './audio.js?v=20261117162020';
+import { platform, hooks, detectLanguage } from './platform.js?v=20261117170831';
+import { AudioManager } from './audio.js?v=20261117170831';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
   buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
   ELEMENTS, ARENAS, arenaIndex, arenaTwist, unitValue, coinUnits, enemyBudget, mercy,
-} from './data.js?v=20261117162020';
-import { isProc, procFlying, procBig, buildCreature } from './creatures.js?v=20261117162020';
-import { icon, applyIcons } from './icons.js?v=20261117162020';
-import { THEMES, themeIndex, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261117162020';
+} from './data.js?v=20261117170831';
+import { isProc, procFlying, procBig, buildCreature } from './creatures.js?v=20261117170831';
+import { icon, applyIcons } from './icons.js?v=20261117170831';
+import { THEMES, themeIndex, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261117170831';
 
 // ============================================================ Helpers
 const $ = (id) => document.getElementById(id);

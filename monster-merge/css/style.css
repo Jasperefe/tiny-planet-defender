@@ -375,3 +375,6 @@ i[data-ico] { font-style: normal; display: inline-flex; }
 .short-land .free-btn { left: auto; right: max(10px, env(safe-area-inset-right)); top: 26%; }
 .short-land .hint { bottom: 10px; font-size: 13px; max-width: 44vw; padding: 6px 10px; }
 .short-land .hint .ico { width: 18px; height: 18px; }
+/* AD labels must be clearly visible on every rewarded button */
+.ad-tag { background: #5a2fd0 !important; color: #fff !important; border: 2px solid #fff; font-size: 12px; padding: 2px 7px; letter-spacing: 1px; }
+.free-btn .ad-tag { margin-top: 4px !important; font-size: 13px; }
