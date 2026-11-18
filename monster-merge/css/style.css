@@ -461,3 +461,15 @@ i[data-ico] { font-style: normal; display: inline-flex; }
   .new-mon .new-tier { grid-area: tier; font-size: 14px; }
   .new-mon #newMonBtn { grid-area: btn; }
 }
+/* Monster Book: cards never overflow on narrow phones; more, smaller cards on wide/short screens */
+.book-grid { grid-template-columns: repeat(auto-fill, minmax(min(62px, 18%), 1fr)); }
+.book-card { min-width: 0; overflow: hidden; overflow-wrap: break-word; hyphens: auto; }
+@media (max-width: 380px) { .book-card { font-size: 8.5px; padding: 3px; } }
+.book-card img { max-width: 100%; height: auto; aspect-ratio: 1; }
+@media (max-height: 460px) and (orientation: landscape) {
+  .book-grid { grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); }
+  #book .panel { width: min(760px, 94vw); max-height: 92vh; padding-top: 30px; gap: 4px; }
+  #book .ribbon { font-size: 20px; padding: 6px 20px; top: -18px; }
+  #book .book-tabs .btn, #book .book-tabs button { padding: 5px 12px; font-size: 13px; }
+  #bookProgress { margin: 0; font-size: 13px; }
+}

@@ -2,7 +2,7 @@
 // The arena changes every 10 levels and cycles after the last theme.
 
 import * as THREE from 'three';
-import { buildPumpkinHead, snowmanProp } from './creatures.js?v=20261118130501';
+import { buildPumpkinHead, snowmanProp } from './creatures.js?v=20261118133001';
 
 const TAU = Math.PI * 2;
 const rand = (a, b) => a + Math.random() * (b - a);

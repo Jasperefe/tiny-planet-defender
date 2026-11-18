@@ -5,18 +5,18 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { platform, hooks, detectLanguage } from './platform.js?v=20261118130501';
-import { AudioManager } from './audio.js?v=20261118130501';
+import { platform, hooks, detectLanguage } from './platform.js?v=20261118133001';
+import { AudioManager } from './audio.js?v=20261118133001';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
   buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
   ELEMENTS, ARENAS, arenaIndex, arenaTwist, unitValue, coinUnits, enemyBudget, mercy,
   LINE_KEYS, MAGE_UNLOCK, TIER_TITLES, TIER_ACCESSORY, TIER_UNLOCK, tierCap, ENEMIES, BOSSES,
   ELEMENT_KEYS, HELL_FROM, FINAL_LEVEL, GUARD_MODEL, ETERNUS, FINAL_RATIO,
-} from './data.js?v=20261118130501';
-import { isProc, procFlying, procBig, buildCreature, PROC } from './creatures.js?v=20261118130501';
-import { icon, applyIcons } from './icons.js?v=20261118130501';
-import { THEMES, themeIndex, VOID_THEME, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261118130501';
+} from './data.js?v=20261118133001';
+import { isProc, procFlying, procBig, buildCreature, PROC } from './creatures.js?v=20261118133001';
+import { icon, applyIcons } from './icons.js?v=20261118133001';
+import { THEMES, themeIndex, VOID_THEME, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261118133001';
 
 // ============================================================ Helpers
 const $ = (id) => document.getElementById(id);
@@ -216,8 +216,7 @@ function loadModel(path) {
   const p = source.then((g) => {
     g.scene.traverse((o) => {
       if (o.isMesh) {
-        o.castShadow = true;
-        o.receiveShadow = true;
+        if (!o.userData.keepShadow) { o.castShadow = true; o.receiveShadow = true; }
         if (o.material) {
           if (!o.material.userData.keepSide) o.material.side = THREE.FrontSide;
           // Color-palette atlases must not be mip-mapped, or neighboring swatches bleed together
@@ -1123,7 +1122,7 @@ async function arenaIntro() {
 async function bossIntro(boss) {
   if (boss.final) return eternusIntro(boss);
   audio.play('bell', { volume: 0.9, vary: 0 });
-  camZoom = { pos: new THREE.Vector3(0, 6, 4), look: new THREE.Vector3(0, 2, -4), k: 0 };
+  camZoom = { pos: new THREE.Vector3(0, 7, 1.2), look: new THREE.Vector3(0, 2, -4), k: 0 };
   tween(0.6, (k) => { if (camZoom) camZoom.k = easeOutCubic(k); });
   boss.group.scale.setScalar(0.2);
   tween(0.6, (k) => boss.group.scale.setScalar(lerp(0.2, 1, easeOutBack(k))));
@@ -1140,7 +1139,7 @@ async function bossIntro(boss) {
 async function eternusIntro(boss) {
   audio.play('slam', { volume: 1, vary: 0 });
   audio.play('bell', { volume: 0.9, vary: 0, rate: 0.7 });
-  camZoom = { pos: new THREE.Vector3(0, 4.2, 3.2), look: new THREE.Vector3(0, 3.2, -5.4), k: 0 };
+  camZoom = { pos: new THREE.Vector3(0, 9, 4.5), look: new THREE.Vector3(0, 3.2, -5.4), k: 0 }; // above both armies, so big monsters never block it
   tween(1.0, (k) => { if (camZoom) camZoom.k = easeOutCubic(k); });
   const y0 = -5;
   boss.group.position.y = y0;
@@ -2784,6 +2783,11 @@ if (platform.name === 'local') {
     get battleOver() { return state === 'result'; }, applyTheme: (i) => applyTheme(i), arenaIntro: () => arenaIntro(), restartLevel: () => restartLevel(), newGame: () => newGame(), screenOf(u) { const v = u.group.position.clone().setY(u.height * 0.5); v.project(camera); return [(v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight]; },
   };
 }
+
+// iOS Safari ignores user-scalable=no: block pinch and double-tap zoom so the game never zooms by accident
+for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+document.addEventListener('dblclick', (e) => e.preventDefault(), { passive: false });
+document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
 
 if (!CAPTURE) requestAnimationFrame(frame);
 boot().catch((e) => {

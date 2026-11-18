@@ -3,7 +3,7 @@
 // as the glTF monsters. Every creature faces +Z and stands on y = 0.
 
 import * as THREE from 'three';
-import { buildEternus, buildVoidKnight } from './eternus.js?v=20261118130501';
+import { buildEternus, buildVoidKnight } from './eternus.js?v=20261118133001';
 
 const TAU = Math.PI * 2;
 

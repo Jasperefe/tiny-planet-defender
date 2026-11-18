@@ -159,6 +159,20 @@ function capeGeo() {
   return g;
 }
 
+// Only the big parts cast shadows: fewer draw calls in the shadow pass (smoother on phones)
+function lightShadows(root) {
+  root.updateMatrixWorld(true);
+  const v = new THREE.Vector3();
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+    o.getWorldScale(v);
+    o.castShadow = o.geometry.boundingSphere.radius * Math.max(v.x, v.y, v.z) > 0.28;
+    o.receiveShadow = false;
+    o.userData.keepShadow = true;
+  });
+}
+
 // ---------------------------------------------------------------- Builder
 export function buildEternus() {
   const m = mats();
@@ -327,7 +341,7 @@ export function buildEternus() {
     orb.add(M(new THREE.TorusGeometry(0.25, 0.015, 6, 30), new THREE.MeshBasicMaterial({ color: col }), { r: [-0.4, 1.2, 0] }));
   }
 
-  root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
+  lightShadows(root);
   return { scene: root, animations: clips(root) };
 }
 
@@ -541,7 +555,7 @@ export function buildVoidKnight() {
   const axG = new THREE.ExtrudeGeometry(axe, { depth: 0.04, bevelEnabled: true, bevelSize: 0.02, bevelThickness: 0.015, bevelSegments: 1 }); axG.translate(0.03, 0, -0.02);
   hal.add(M(axG, m.steel, { p: [0, 1.65, 0] }));
   hal.add(M(new THREE.TorusGeometry(0.08, 0.025, 6, 16), visor, { p: [0.02, 1.65, 0.04] }));
-  root.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  lightShadows(root);
   return { scene: root, animations: knightClips(root) };
 }
 
