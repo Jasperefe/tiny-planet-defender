@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<link rel="icon" href="data:,">
+<title>Monster Merge Arena</title>
+<script>window.PLATFORM = "local";</script>
+<script>window.PLATFORM = window.PLATFORM || 'local';</script>
+<link rel="stylesheet" href="css/style.css?v=20261118124927">
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="fx"></div>
+
+<!-- Loading -->
+<div id="loading" class="screen show">
+  <div class="logo"><span>MONSTER</span><b>MERGE ARENA</b></div>
+  <div class="bar"><i id="loadBar"></i></div>
+  <div class="load-tip">Merge two of the same monster to evolve it!</div>
+</div>
+
+<!-- Top bar -->
+<div id="top" class="hidden">
+  <div class="top-left">
+    <button id="bookBtn" class="round-btn" aria-label="Monster book"><i data-ico="book"></i></button>
+    <button id="signInBtn" class="signin-btn hidden" aria-label="Sign in"><i data-ico="user"></i><span>SIGN IN</span></button>
+  </div>
+  <div class="level-box">
+    <div class="level-title"><i id="legendTag" class="legend-tag hidden" data-ico="star" title="LEGEND"></i>LEVEL <span id="levelNum">1</span></div>
+    <div id="road" class="road"></div>
+  </div>
+  <div class="top-right">
+    <div class="coins"><span class="coin-icon"></span><span id="coinNum">0</span></div>
+    <button id="settingsBtn" class="round-btn" aria-label="Settings"><i data-ico="gear"></i></button>
+  </div>
+</div>
+
+<!-- Enemy power vs your power -->
+<div id="powerBar" class="power hidden">
+  <div class="power-side you"><small>YOU</small><b id="powerYou">0</b></div>
+  <div class="power-vs">VS</div>
+  <div class="power-side foe"><small>ENEMY</small><b id="powerFoe">0</b></div>
+</div>
+
+<!-- Bottom controls -->
+<div id="bottom" class="hidden">
+  <button id="freeBtn" class="free-btn hidden"><span style="font-size:30px"><i data-ico="gift"></i></span>FREE<br>MONSTER<span class="ad-tag" style="margin:2px 0 0">AD</span></button>
+  <button id="buyMage" class="buy-btn mage hidden">
+    <span class="buy-ico"><i data-ico="wand"></i></span><span class="buy-name">MAGE</span>
+    <span class="buy-price"><span class="coin-icon"></span><span id="priceMage">6</span></span>
+  </button>
+  <div class="bottom-row">
+    <button id="buyMelee" class="buy-btn melee">
+      <span class="buy-ico"><i data-ico="sword"></i></span><span class="buy-name">BRAWLER</span>
+      <span class="buy-price"><span class="coin-icon"></span><span id="priceMelee">6</span></span>
+    </button>
+    <button id="fightBtn" class="fight-btn">FIGHT!</button>
+    <button id="buyRanged" class="buy-btn ranged">
+      <span class="buy-ico"><i data-ico="wing"></i></span><span class="buy-name">FLYER</span>
+      <span class="buy-price"><span class="coin-icon"></span><span id="priceRanged">6</span></span>
+    </button>
+  </div>
+</div>
+
+<div id="sellBin" class="sell-bin hidden"><span class="bin-ico"><i data-ico="trash"></i></span><span>DROP TO SELL</span><span class="bin-val"><span class="coin-icon"></span><span id="sellValue">0</span></span></div>
+<div id="hint" class="hint hidden"></div>
+<div id="banner" class="banner"></div>
+<div id="bossName" class="boss-name hidden"></div>
+<div id="arenaIntro" class="arena-intro hidden"><small>NEW ARENA</small><b id="arenaName"></b><span id="arenaTwist"></span></div>
+<div id="flash" class="flash"></div>
+
+<!-- Victory -->
+<div id="win" class="screen">
+  <div class="panel">
+    <div class="ribbon gold">VICTORY!</div>
+    <div class="stars"><span><i data-ico="star"></i></span><span><i data-ico="star"></i></span><span><i data-ico="star"></i></span></div>
+    <div class="reward"><span class="coin-icon big"></span><span id="winCoins">0</span></div>
+    <button id="tripleBtn" class="btn green hidden"><span class="ad-tag">AD</span> CLAIM x3</button>
+    <button id="claimBtn" class="btn blue">CONTINUE</button>
+  </div>
+</div>
+
+<!-- Final boss defeated -->
+<div id="legend" class="screen">
+  <div class="panel legend">
+    <div class="ribbon gold">LEGEND!</div>
+    <div class="legend-star"><i data-ico="star"></i></div>
+    <h2 class="legend-title">YOU DEFEATED<b>VOIDLORD ETERNUS</b></h2>
+    <p class="legend-text">The Last Monarch has fallen. You are a <b>LEGEND</b> of the Monster Merge Arena!</p>
+    <div class="credits"><div class="roll">
+      <b>MONSTER MERGE ARENA</b>
+      <span>Game by</span><em>Esire Omoefe</em>
+      <span>3D monsters &amp; props</span><em>Quaternius</em>
+      <span>Sound effects</span><em>Kenney</em>
+      <span>Music</span><em>HydroGene &amp; iamoneabe</em>
+      <span>3D engine</span><em>three.js</em>
+      <span>Final boss</span><em>Voidlord Eternus</em>
+      <b>THANKS FOR PLAYING!</b>
+      <span>The arena never ends...</span>
+    </div></div>
+    <button id="legendBtn" class="btn green">CONTINUE: ENDLESS MODE</button>
+  </div>
+</div>
+
+<!-- Defeat -->
+<div id="lose" class="screen">
+  <div class="panel">
+    <div class="ribbon red">DEFEAT</div>
+    <p class="lose-tip" id="loseTip">Merge more monsters to get stronger!</p>
+    <div class="reward"><span class="coin-icon big"></span><span id="loseCoins">0</span></div>
+    <button id="bonusBtn" class="btn green hidden"><span class="ad-tag">AD</span> RETRY + BONUS MONSTER</button>
+    <button id="retryBtn" class="btn blue">TRY AGAIN</button>
+  </div>
+</div>
+
+<!-- New monster discovered -->
+<div id="newMon" class="screen">
+  <div class="panel new-mon">
+    <div class="ribbon purple">NEW MONSTER!</div>
+    <img id="newMonImg" alt="">
+    <div class="new-name" id="newMonName"></div>
+    <div class="new-tier" id="newMonTier"></div>
+    <button id="newMonBtn" class="btn green">AWESOME!</button>
+  </div>
+</div>
+
+<!-- Chest -->
+<div id="chestHint" class="chest-hint hidden">TAP THE CHEST!</div>
+<div id="chestWin" class="screen">
+  <div class="panel">
+    <div class="ribbon gold">TREASURE!</div>
+    <div class="reward"><span class="coin-icon big"></span><span id="chestCoins">0</span></div>
+    <div class="chest-extra" id="chestExtra"></div>
+    <button id="chestDoubleBtn" class="btn green hidden"><span class="ad-tag">AD</span> DOUBLE TREASURE</button>
+    <button id="chestBtn" class="btn blue">COLLECT</button>
+  </div>
+</div>
+
+<!-- Daily reward -->
+<div id="daily" class="screen">
+  <div class="panel">
+    <div class="ribbon gold">DAILY GIFT</div>
+    <div class="daily-day" id="dailyDay">Day 1</div>
+    <div class="reward"><span class="coin-icon big"></span><span id="dailyCoins">0</span></div>
+    <button id="dailyDoubleBtn" class="btn green hidden"><span class="ad-tag">AD</span> CLAIM x2</button>
+    <button id="dailyBtn" class="btn blue">CLAIM</button>
+  </div>
+</div>
+
+<!-- Monster book -->
+<div id="book" class="screen">
+  <div class="panel wide">
+    <div class="ribbon purple">MONSTER BOOK</div>
+    <div class="book-progress" id="bookProgress"></div>
+    <div class="book-tabs"><button id="tabMine" class="on">YOUR MONSTERS <span id="countMine"></span></button><button id="tabBest">BESTIARY <span id="countBest"></span></button></div>
+    <div id="bookMine">
+      <div class="book-line"><h3><i data-ico="sword"></i> Brawlers</h3><div class="book-grid" id="bookMelee"></div></div>
+      <div class="book-line"><h3><i data-ico="wing"></i> Flyers</h3><div class="book-grid" id="bookRanged"></div></div>
+      <div class="book-line"><h3><i data-ico="wand"></i> Mages</h3><div class="book-grid" id="bookMage"></div></div>
+    </div>
+    <div id="bookBest" class="hidden"></div>
+    <button id="bookClose" class="btn blue">CLOSE</button>
+  </div>
+</div>
+
+<!-- Settings -->
+<div id="settings" class="screen">
+  <div class="panel">
+    <div class="ribbon blue">SETTINGS</div>
+    <button id="sfxBtn" class="btn ghost">SOUND: ON</button>
+    <button id="musicBtn" class="btn ghost">MUSIC: ON</button>
+    <button id="signInBtn2" class="btn ghost hidden"><i data-ico="user"></i> SIGN IN (SAVE ONLINE)</button>
+    <button id="guideBtn" class="btn ghost"><i data-ico="question"></i> HOW TO PLAY</button>
+    <button id="creditsBtn" class="btn ghost">CREDITS</button>
+    <button id="restartLevelBtn" class="btn ghost"><i data-ico="restart"></i> RESTART LEVEL</button>
+    <button id="newGameBtn" class="btn ghost danger"><i data-ico="warning"></i> NEW GAME</button>
+    <button id="settingsClose" class="btn blue">CLOSE</button>
+  </div>
+</div>
+
+<!-- How to play -->
+<div id="guide" class="screen">
+  <div class="panel guide">
+    <div class="ribbon purple" id="guideTitle">HOW TO PLAY</div>
+    <button id="guideSkip" class="g-skip" aria-label="Close"><i data-ico="close"></i></button>
+    <div class="g-art" id="guideArt"></div>
+    <p class="g-text" id="guideText"></p>
+    <div class="g-dots" id="guideDots"></div>
+    <div class="g-nav">
+      <button id="guideBack" class="btn ghost">BACK</button>
+      <button id="guideNext" class="btn green">NEXT</button>
+    </div>
+  </div>
+</div>
+<!-- New element card -->
+<div id="elemCard" class="screen">
+  <div class="panel">
+    <div class="ribbon red">NEW ENEMY POWER!</div>
+    <div class="e-icon" id="elemIcon"></div>
+    <div class="e-name" id="elemName"></div>
+    <p class="g-text" id="elemDesc"></p>
+    <p class="e-tip" id="elemTip"></p>
+    <button id="elemOk" class="btn green">GOT IT!</button>
+  </div>
+</div>
+
+<!-- Confirm new game -->
+<div id="confirmReset" class="screen">
+  <div class="panel">
+    <div class="ribbon red">START OVER?</div>
+    <p class="lose-tip">All your monsters, coins and levels will be lost. This cannot be undone.</p>
+    <button id="resetYes" class="btn red">YES, START OVER</button>
+    <button id="resetNo" class="btn blue">NO, KEEP PLAYING</button>
+  </div>
+</div>
+
+<!-- Credits -->
+<div id="credits" class="screen">
+  <div class="panel">
+    <div class="ribbon blue">CREDITS</div>
+    <div class="credits-list">
+      <p><b>Game design &amp; code</b><br>Esire Omoefe</p>
+      <p><b>Monsters: Ultimate Monsters Pack</b><br>Quaternius &middot; quaternius.com &middot; CC0</p>
+      <p><b>Arena: Ultimate Platformer Pack, Stylized Nature MegaKit, Fantasy Props MegaKit</b><br>Quaternius &middot; quaternius.com &middot; CC0</p>
+      <p><b>Sound effects: Impact Sounds, RPG Audio, Interface Sounds</b><br>Kenney &middot; www.kenney.nl &middot; CC0</p>
+      <p><b>Music: "JRPG Epic Rock Battle Theme #1"</b><br>HydroGene &middot; OpenGameArt.org &middot; CC0</p>
+      <p><b>Music: "RPG Battle Loop"</b><br>iamoneabe &middot; OpenGameArt.org &middot; CC0</p>
+      <p><b>Engine</b><br>three.js &middot; MIT License</p>
+    </div>
+    <button id="creditsClose" class="btn blue">BACK</button>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "./lib/three/three.module.js", "three/addons/": "./lib/three/addons/" } }
+</script>
+<script type="module" src="js/main.js?v=20261118124927"></script>
+</body>
+</html>

@@ -1,0 +1,2792 @@
+// Monster Merge Arena
+// Buy monsters, merge identical ones to evolve them, then watch the 3D battle.
+
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
+import { platform, hooks, detectLanguage } from './platform.js?v=20261118124927';
+import { AudioManager } from './audio.js?v=20261118124927';
+import {
+  LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
+  buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
+  ELEMENTS, ARENAS, arenaIndex, arenaTwist, unitValue, coinUnits, enemyBudget, mercy,
+  LINE_KEYS, MAGE_UNLOCK, TIER_TITLES, TIER_ACCESSORY, TIER_UNLOCK, tierCap, ENEMIES, BOSSES,
+  ELEMENT_KEYS, HELL_FROM, FINAL_LEVEL, GUARD_MODEL, ETERNUS, FINAL_RATIO,
+} from './data.js?v=20261118124927';
+import { isProc, procFlying, procBig, buildCreature, PROC } from './creatures.js?v=20261118124927';
+import { icon, applyIcons } from './icons.js?v=20261118124927';
+import { THEMES, themeIndex, VOID_THEME, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261118124927';
+
+// ============================================================ Helpers
+const $ = (id) => document.getElementById(id);
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = (arr) => arr[(Math.random() * arr.length) | 0];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const TAU = Math.PI * 2;
+const easeOutBack = (t) => { const c = 1.7; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };
+const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+const tmp = new THREE.Vector3();
+const tmp2 = new THREE.Vector3();
+const tmpC = new THREE.Color();
+
+// Simple tween system
+const tweens = [];
+function tween(duration, fn, done) {
+  const t = { time: 0, duration, fn, done };
+  tweens.push(t);
+  return t;
+}
+function updateTweens(dt) {
+  for (let i = tweens.length - 1; i >= 0; i--) {
+    const t = tweens[i];
+    t.time += dt;
+    const k = Math.min(1, t.time / t.duration);
+    try {
+      t.fn(k);
+      if (k >= 1) { tweens.splice(i, 1); if (t.done) t.done(); }
+    } catch (e) {
+      console.warn('tween error', e);
+      tweens.splice(i, 1);
+      if (t.done) { try { t.done(); } catch {} }
+    }
+  }
+}
+const wait = (s) => new Promise((r) => tween(s, () => {}, r));
+
+// ============================================================ Board layout
+const TILE = 2;
+const COLS = 5;
+const ROWS = 3;
+// Player rows at z = 3, 5, 7 (row 0 is the front). Enemy rows at z = -3, -5, -7.
+function cellPos(team, row, col) {
+  const x = (col - 2) * TILE;
+  const z = team === 'player' ? 3 + row * TILE : -3 - row * TILE;
+  return new THREE.Vector3(x, 0, z);
+}
+function posToCell(p) {
+  const col = Math.round(p.x / TILE + 2);
+  const row = Math.round((p.z - 3) / TILE);
+  if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return null;
+  return { row, col };
+}
+
+const CAPTURE = new URLSearchParams(location.search).has('capture');
+if (CAPTURE) document.documentElement.classList.add('capture');
+let forcedDt = null;
+
+// ============================================================ State
+const save = {
+  level: 1, coins: START_COINS, buys: { melee: 0, ranged: 0, mage: 0 },
+  board: [{ type: 'melee', tier: 1, row: 0, col: 2 }, { type: 'melee', tier: 1, row: 0, col: 1 }],
+  discovered: { melee: 1, ranged: 0, mage: 0 },
+  defeated: {}, mageUnlocked: false, tierSeen: {},
+  sfx: true, music: true, lastDaily: '', streak: 0, levelsSinceAd: 0, freeUsedLevel: 0,
+  foe: null, // { level, budget, losses } the enemy army stays the same on retries
+  guideSeen: false, elemSeen: {},
+  hellSeen: false, legend: false, // final boss mode (Playgama)
+};
+let state = 'loading'; // loading | prep | battle | result | chest
+let paused = false;
+let adActive = false;
+let timeScale = 1;
+let slowMoTimer = 0;
+let shake = 0;
+let battleTime = 0;
+let currentLevel = null;
+let hintShown = false;
+// Final boss mode (Playgama only for now): hell from level 100, Voidlord Eternus at 150
+const FINAL = !!platform.finalBoss;
+const isFinalLevel = (l) => FINAL && l === FINAL_LEVEL;
+const tIdx = (l) => (isFinalLevel(l) ? VOID_THEME : themeIndex(l));
+
+// ============================================================ Renderer
+const canvas = $('game');
+const isMobile = matchMedia('(pointer: coarse)').matches;
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+let pixelRatio = Math.min(window.devicePixelRatio || 1, isMobile ? 1.75 : 2);
+renderer.setPixelRatio(pixelRatio);
+renderer.toneMapping = THREE.NeutralToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0xbfe8ff, 60, 150);
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 400);
+const camTarget = new THREE.Vector3(0, 0, 0.6);
+const camBase = new THREE.Vector3();
+const camLook = new THREE.Vector3();
+let camZoom = null; // { pos, look, k }
+
+// Sky dome (gradient, optional stars) and a moon for night arenas
+const skyMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  uniforms: { top: { value: new THREE.Color(0x3fa9ff) }, mid: { value: new THREE.Color(0xa8e2ff) }, bottom: { value: new THREE.Color(0xe9f8ff) }, stars: { value: 0 }, uTime: { value: 0 } },
+  vertexShader: 'varying vec3 vP; void main(){ vP = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `uniform vec3 top; uniform vec3 mid; uniform vec3 bottom; uniform float stars; uniform float uTime; varying vec3 vP;
+    void main(){
+      float h = vP.y; vec3 c = h > 0.0 ? mix(mid, top, pow(h, 0.7)) : mix(mid, bottom, pow(-h, 0.6));
+      if (stars > 0.0 && h > 0.02) {
+        vec3 q = floor(vP * 160.0);
+        float r = fract(sin(dot(q, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+        float tw = 0.6 + 0.4 * sin(uTime * 2.0 + r * 60.0);
+        c += vec3(step(0.9965, r) * smoothstep(0.02, 0.35, h) * tw * stars);
+      }
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+});
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(300, 32, 16), skyMat));
+const moon = new THREE.Group();
+{
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(9, 32), new THREE.MeshBasicMaterial({ color: 0xfff4d6, fog: false }));
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xfff0d0, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.6, fog: false }));
+  halo.scale.setScalar(55);
+  moon.add(halo, disc);
+  moon.position.set(-90, 95, -230);
+  moon.lookAt(0, 0, 0);
+  moon.visible = false;
+  scene.add(moon);
+}
+
+// Lights
+const hemi = new THREE.HemisphereLight(0xe4f4ff, 0x7a8f4c, 1.5);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff0d6, 2.6);
+sun.position.set(-14, 28, 16);
+sun.castShadow = true;
+sun.shadow.mapSize.set(isMobile ? 1024 : 2048, isMobile ? 1024 : 2048);
+const sc = sun.shadow.camera;
+sc.left = -16; sc.right = 16; sc.top = 16; sc.bottom = -16; sc.near = 1; sc.far = 80;
+sun.shadow.bias = -0.0005;
+sun.shadow.normalBias = 0.03;
+scene.add(sun);
+scene.add(sun.target);
+
+// Fit the board on screen for any aspect ratio (phone portrait to wide desktop)
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.fov = camera.aspect < 0.8 ? 48 : 40;
+  camera.updateProjectionMatrix();
+  const dir = new THREE.Vector3(0, 0.82, 0.57).normalize();
+  const corners = [];
+  for (const x of [-5.2, 5.2]) for (const z of [-8, 8]) for (const y of [0, 2]) corners.push(new THREE.Vector3(x, y, z));
+  // Short landscape phones: buttons move to the sides, so the board gets the middle
+  const shortLand = h < 520 && w > h * 1.3;
+  document.documentElement.classList.toggle('short-land', shortLand);
+  const xLimit = shortLand ? 0.62 : 0.96;
+  const topLimit = shortLand ? 0.5 : camera.aspect < 0.8 ? 0.6 : 0.66;
+  const bottomLimit = shortLand ? -0.93 : camera.aspect < 0.8 ? -0.5 : -0.52;
+  // Closest camera that fits the field inside the free screen area.
+  // In short landscape the aim point may slide along the board to use the space best.
+  const fits = (target, d) => {
+    camera.position.copy(target).addScaledVector(dir, d);
+    camera.lookAt(target);
+    camera.updateMatrixWorld();
+    for (const c of corners) {
+      tmp.copy(c).project(camera);
+      if (Math.abs(tmp.x) > xLimit || tmp.y > topLimit || tmp.y < bottomLimit) return false;
+    }
+    return true;
+  };
+  let best = null;
+  for (const dz of shortLand ? [-3, -2.5, -2, -1.5, -1, -0.5, 0, 0.5] : [0]) {
+    const target = camTarget.clone(); target.z += dz;
+    let d = 10;
+    while (d < 120 && !fits(target, d)) d += 0.5;
+    if (!best || d < best.d) best = { d, target };
+  }
+  fits(best.target, best.d);
+  camBase.copy(camera.position);
+  camLook.copy(best.target);
+}
+
+// ============================================================ Asset loading
+const loader = new GLTFLoader();
+loader.setMeshoptDecoder(MeshoptDecoder);
+const templates = new Map(); // name -> Promise<{ scene, animations, info }>
+
+function loadModel(path) {
+  if (templates.has(path)) return templates.get(path);
+  // Procedural monsters are built in code instead of loaded
+  const source = path.startsWith('proc:') ? Promise.resolve(buildCreature(path.slice(5))) : loader.loadAsync(path);
+  const p = source.then((g) => {
+    g.scene.traverse((o) => {
+      if (o.isMesh) {
+        o.castShadow = true;
+        o.receiveShadow = true;
+        if (o.material) {
+          if (!o.material.userData.keepSide) o.material.side = THREE.FrontSide;
+          // Color-palette atlases must not be mip-mapped, or neighboring swatches bleed together
+          const map = o.material.map;
+          if (map && path.includes('/monsters/')) {
+            map.generateMipmaps = false;
+            map.minFilter = THREE.NearestFilter;
+            map.magFilter = THREE.NearestFilter;
+            map.needsUpdate = true;
+            o.material.color.multiplyScalar(1.45); // the palette is muted; brighten for a cartoon look
+            o.material.roughness = 0.75;
+          }
+        }
+      }
+    });
+    // Measure in the first idle frame
+    const box = new THREE.Box3().setFromObject(g.scene);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    return { scene: g.scene, animations: g.animations, size, center, minY: box.min.y };
+  });
+  templates.set(path, p);
+  return p;
+}
+const monsterPath = (name) => (isProc(name) ? `proc:${name}` : `assets/models/monsters/${name}.glb`);
+const envPath = (name) => `assets/models/env/${name}.glb`;
+
+async function envObject(name, height, opts = {}) {
+  const t = await loadModel(envPath(name));
+  const obj = t.scene.clone(true);
+  const s = height / t.size.y;
+  const g = new THREE.Group();
+  obj.scale.setScalar(s);
+  obj.position.set(-t.center.x * s, -t.minY * s, -t.center.z * s);
+  g.add(obj);
+  if (opts.noShadow) g.traverse((o) => { if (o.isMesh) { o.castShadow = false; } });
+  return g;
+}
+
+// ============================================================ Arena
+const arena = new THREE.Group();
+scene.add(arena);
+const cellMarkers = { player: [], enemy: [] };
+const clouds = [];
+const tileMaterials = [];
+
+async function buildArena() {
+  const cube = await loadModel(envPath('pf_Cube_Grass_Center'));
+  // Prepare two tints for a checkerboard look
+  const baseMats = [];
+  cube.scene.traverse((o) => { if (o.isMesh) baseMats.push(o.material); });
+  const tintA = new Map(), tintB = new Map();
+  for (const m of baseMats) {
+    const a = m.clone(); const b = m.clone();
+    b.color.multiplyScalar(0.9);
+    b.userData.factor = 0.9;
+    tintA.set(m, a); tintB.set(m, b);
+    tileMaterials.push(a, b);
+  }
+  const s = TILE / cube.size.x;
+  const addCube = (x, z, alt, y = -1, receiveOnly = false) => {
+    const o = cube.scene.clone(true);
+    o.scale.setScalar(s);
+    o.position.set(x - cube.center.x * s, y - cube.center.y * s, z - cube.center.z * s);
+    o.traverse((m) => {
+      if (m.isMesh) {
+        m.material = (alt ? tintB : tintA).get(m.material) || m.material;
+        m.castShadow = !receiveOnly;
+        m.receiveShadow = true;
+      }
+    });
+    arena.add(o);
+  };
+  // Main field 7 x 10 tiles (board + one ring)
+  for (let cx = -3; cx <= 3; cx++) {
+    for (let cz = -5; cz <= 4; cz++) {
+      const x = cx * TILE, z = cz * TILE + 1;
+      addCube(x, z, (cx + cz) % 2 !== 0, -1, true);
+    }
+  }
+  // Second layer below, slightly smaller, for thickness
+  for (let cx = -2; cx <= 2; cx++) for (let cz = -4; cz <= 3; cz++) addCube(cx * TILE, cz * TILE + 1, false, -3, true);
+
+  // Floating rock underneath
+  const rockT = await loadModel(envPath('pf_RockPlatforms_Large'));
+  const rock = rockT.scene.clone(true);
+  const rs = 2.3;
+  rock.scale.set(rs, rs * 1.4, rs * 2.0);
+  rock.rotation.x = Math.PI;
+  rock.position.set(-rockT.center.x * rs, -3.6, -rockT.center.z * rs * 2.0 + 0.5);
+  arena.add(rock);
+
+  // Cell markers: rounded squares on each grid cell
+  const markerGeo = new THREE.PlaneGeometry(TILE * 0.88, TILE * 0.88);
+  markerGeo.rotateX(-Math.PI / 2);
+  for (const team of ['player', 'enemy']) {
+    for (let row = 0; row < ROWS; row++) {
+      for (let col = 0; col < COLS; col++) {
+        const mat = new THREE.MeshBasicMaterial({
+          color: team === 'player' ? 0x4fb8ff : 0xff6b6b, transparent: true, opacity: team === 'player' ? 0.22 : 0.16,
+          depthWrite: false, map: markerTexture,
+        });
+        const m = new THREE.Mesh(markerGeo, mat);
+        m.position.copy(cellPos(team, row, col));
+        m.position.y = 0.02;
+        m.renderOrder = 1;
+        arena.add(m);
+        cellMarkers[team].push({ row, col, mesh: m });
+      }
+    }
+  }
+
+  // Enemy castle on its own floating island behind the arena
+  const castleIsland = new THREE.Group();
+  const isl = rockT.scene.clone(true);
+  isl.scale.set(1.1, 1.3, 1.1);
+  isl.rotation.x = Math.PI;
+  isl.position.set(-rockT.center.x * 1.1, -0.2, -rockT.center.z * 1.1);
+  castleIsland.add(isl);
+  const tower = await envObject('pf_Tower', 9);
+  tower.position.y = 0.2;
+  castleIsland.add(tower);
+  castleIsland.position.set(0, -2, -22);
+  envRoot.add(castleIsland);
+
+  // Distant floating islands with trees
+  const addIsland = async (x, y, z, s2, tree) => {
+    const g = new THREE.Group();
+    const r = rockT.scene.clone(true);
+    r.scale.setScalar(s2);
+    r.rotation.x = Math.PI;
+    r.position.set(-rockT.center.x * s2, 0, -rockT.center.z * s2);
+    g.add(r);
+    if (tree) { const t = await envObject(tree, 4 * s2 * 0.6); t.position.y = 0.1; g.add(t); }
+    g.position.set(x, y, z);
+    envRoot.add(g);
+    clouds.push({ obj: g, base: y, speed: 0, bob: rand(0, TAU) });
+  };
+  await Promise.all([
+    addIsland(-26, -5, -18, 0.9, 'pf_Tree_Fruit'),
+    addIsland(28, -8, -6, 0.7, 'n_Pine_1'),
+    addIsland(-22, -12, 14, 0.6, null),
+    addIsland(20, -3, -34, 0.8, 'pf_Tree'),
+  ]);
+
+  // Clouds drifting around and below the island
+  const cloudNames = ['pf_Cloud_1', 'pf_Cloud_2', 'pf_Cloud_3'];
+  for (let i = 0; i < 12; i++) {
+    const c = await envObject(pick(cloudNames), rand(1.6, 3), { noShadow: true });
+    c.traverse((o) => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.setRGB(1, 1, 1); o.material.userData.skip = true; cloudMats.push(o.material); o.receiveShadow = false; } });
+    const below = i < 7;
+    c.position.set(rand(-45, 45), below ? rand(-18, -9) : rand(4, 10), below ? rand(-40, 10) : rand(-60, -30));
+    if (below && Math.abs(c.position.x) < 12) c.position.x += Math.sign(c.position.x || 1) * 14;
+    c.scale.multiplyScalar(rand(1, 1.8));
+    envRoot.add(c);
+    clouds.push({ obj: c, base: c.position.y, speed: rand(0.4, 1.1), bob: rand(0, TAU) });
+  }
+}
+
+// ============================================================ Arena themes
+const envRoot = new THREE.Group();
+scene.add(envRoot);
+const decorGroup = new THREE.Group();
+scene.add(decorGroup);
+const cloudMats = [];
+let themeNow = -1;
+let emberSources = [];
+const floatProps = [];
+// Lava sea far below the island (Magma Core)
+const lavaSeaU = { uTime: { value: 0 } };
+animatedUniforms.push(lavaSeaU);
+const lavaSea = new THREE.Mesh(new THREE.PlaneGeometry(700, 700), lavaMaterial(lavaSeaU, true));
+lavaSea.rotation.x = -Math.PI / 2;
+lavaSea.position.y = -34;
+lavaSea.visible = false;
+scene.add(lavaSea);
+
+// Recolor every environment material by name for the current theme
+function recolor(root, theme) {
+  const seen = new Set();
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    const m = o.material;
+    if (!m || seen.has(m) || !m.color || !m.name || m.userData.skip) return;
+    seen.add(m);
+    if (!m.userData.orig) { m.userData.orig = m.color.clone(); m.userData.origMap = m.map || null; }
+    const rule = theme.recolor[m.name];
+    const hex = Array.isArray(rule) ? rule[0] : rule;
+    if (hex !== undefined) {
+      m.color.setHex(hex).multiplyScalar(m.userData.factor || 1);
+      const flat = (m.name.startsWith('Leaves') && m.userData.origMap) || (Array.isArray(rule) && rule[1] === 'flat');
+      if (flat !== !m.map) { m.map = flat ? null : m.userData.origMap; m.needsUpdate = true; }
+    } else {
+      m.color.copy(m.userData.orig);
+      if (m.map !== m.userData.origMap) { m.map = m.userData.origMap; m.needsUpdate = true; }
+    }
+  });
+}
+
+async function buildDecor(theme) {
+  while (decorGroup.children.length) decorGroup.remove(decorGroup.children[0]);
+  emberSources = [];
+  floatProps.length = 0;
+  await Promise.all(theme.decor.map(async ([name, h, x, z, rot, noShadow]) => {
+    const o = isProp(name) ? buildProp(name, h) : await envObject(name, h, { noShadow: !!noShadow });
+    o.position.x = x; o.position.z = z;
+    o.rotation.y = rot === undefined ? rand(0, TAU) : rot;
+    if (o.userData.float) { o.position.y = rand(3, 8); floatProps.push({ obj: o, base: o.position.y, bob: rand(0, TAU) }); }
+    if (name === '@lava') emberSources.push(new THREE.Vector3(x, 0.15, z));
+    if (o.userData.ember) emberSources.push(new THREE.Vector3(x, h * o.userData.ember[1], z));
+    decorGroup.add(o);
+  }));
+}
+
+async function applyTheme(i) {
+  if (i === themeNow) return;
+  themeNow = i;
+  const th = THEMES[i];
+  skyMat.uniforms.top.value.setHex(th.sky[0]);
+  skyMat.uniforms.mid.value.setHex(th.sky[1]);
+  skyMat.uniforms.bottom.value.setHex(th.sky[2]);
+  skyMat.uniforms.stars.value = th.stars || 0;
+  scene.fog.color.setHex(th.fog);
+  hemi.color.setHex(th.hemi[0]); hemi.groundColor.setHex(th.hemi[1]); hemi.intensity = th.hemi[2];
+  sun.color.setHex(th.sun[0]); sun.intensity = th.sun[1];
+  renderer.toneMappingExposure = th.exposure;
+  moon.visible = !!th.moon;
+  if (th.moon) moon.children[1].material.color.setHex(th.moon);
+  lavaSea.visible = !!th.lavaSea;
+  for (const m of cloudMats) m.color.setHex(th.cloud);
+  await buildDecor(th);
+  recolor(arena, th); recolor(envRoot, th); recolor(decorGroup, th);
+}
+
+// Soft rounded-square texture for cell markers
+const markerTexture = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff';
+  const r = 26;
+  g.beginPath();
+  g.moveTo(r + 6, 6); g.arcTo(122, 6, 122, 122, r); g.arcTo(122, 122, 6, 122, r); g.arcTo(6, 122, 6, 6, r); g.arcTo(6, 6, 122, 6, r);
+  g.closePath(); g.fill();
+  g.globalCompositeOperation = 'destination-out';
+  g.beginPath();
+  g.moveTo(r + 16, 16); g.arcTo(112, 16, 112, 112, r - 8); g.arcTo(112, 112, 16, 112, r - 8); g.arcTo(16, 112, 16, 16, r - 8); g.arcTo(16, 16, 112, 16, r - 8);
+  g.closePath();
+  g.fillStyle = 'rgba(0,0,0,0.55)';
+  g.fill();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+})();
+
+// ============================================================ Particles
+class Particles {
+  constructor(max, additive) {
+    this.max = max;
+    this.pos = new Float32Array(max * 3);
+    this.col = new Float32Array(max * 3);
+    this.size = new Float32Array(max);
+    this.alpha = new Float32Array(max);
+    this.vel = new Float32Array(max * 3);
+    this.life = new Float32Array(max);
+    this.maxLife = new Float32Array(max);
+    this.base = new Float32Array(max);
+    this.grav = new Float32Array(max);
+    this.next = 0;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
+    g.setAttribute('aColor', new THREE.BufferAttribute(this.col, 3).setUsage(THREE.DynamicDrawUsage));
+    g.setAttribute('aSize', new THREE.BufferAttribute(this.size, 1).setUsage(THREE.DynamicDrawUsage));
+    g.setAttribute('aAlpha', new THREE.BufferAttribute(this.alpha, 1).setUsage(THREE.DynamicDrawUsage));
+    this.geo = g;
+    this.mat = new THREE.ShaderMaterial({
+      uniforms: { uScale: { value: 300 * pixelRatio } },
+      vertexShader: `attribute vec3 aColor; attribute float aSize; attribute float aAlpha; uniform float uScale;
+        varying vec3 vC; varying float vA;
+        void main(){ vec4 mv = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * mv;
+          gl_PointSize = aSize * uScale / -mv.z; vC = aColor; vA = aAlpha; }`,
+      fragmentShader: additive
+        ? `varying vec3 vC; varying float vA; void main(){ float d = length(gl_PointCoord-0.5); float a = smoothstep(0.5,0.0,d)*vA; gl_FragColor = vec4(vC*a, a); }`
+        : `varying vec3 vC; varying float vA; void main(){ float d = length(gl_PointCoord-0.5); if (d > 0.5) discard; float a = smoothstep(0.5,0.35,d)*vA; gl_FragColor = vec4(vC, a); }`,
+      transparent: true, depthWrite: false,
+      blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+    });
+    this.points = new THREE.Points(g, this.mat);
+    this.points.frustumCulled = false;
+    this.points.renderOrder = 5;
+  }
+  spawn(p, v, color, size, life, grav = 0) {
+    const i = this.next;
+    this.next = (this.next + 1) % this.max;
+    this.pos.set([p.x, p.y, p.z], i * 3);
+    this.vel.set([v.x, v.y, v.z], i * 3);
+    this.col.set([color.r, color.g, color.b], i * 3);
+    this.base[i] = size; this.size[i] = size;
+    this.life[i] = life; this.maxLife[i] = life; this.alpha[i] = 1; this.grav[i] = grav;
+  }
+  update(dt) {
+    for (let i = 0; i < this.max; i++) {
+      if (this.life[i] <= 0) { if (this.alpha[i]) { this.alpha[i] = 0; this.size[i] = 0; } continue; }
+      this.life[i] -= dt;
+      const k = 1 - 2.2 * dt;
+      this.vel[i * 3] *= k; this.vel[i * 3 + 2] *= k;
+      this.vel[i * 3 + 1] = this.vel[i * 3 + 1] * k - this.grav[i] * dt;
+      this.pos[i * 3] += this.vel[i * 3] * dt;
+      this.pos[i * 3 + 1] += this.vel[i * 3 + 1] * dt;
+      this.pos[i * 3 + 2] += this.vel[i * 3 + 2] * dt;
+      const t = Math.max(0, this.life[i] / this.maxLife[i]);
+      this.alpha[i] = Math.min(1, t * 1.6);
+      this.size[i] = this.base[i] * (0.5 + 0.5 * t);
+    }
+    for (const n of ['position', 'aColor', 'aSize', 'aAlpha']) this.geo.attributes[n].needsUpdate = true;
+  }
+}
+const glow = new Particles(1500, true);
+const puff = new Particles(600, false);
+scene.add(glow.points, puff.points);
+const C = {
+  spark: new THREE.Color(1.6, 1.4, 0.8),
+  gold: new THREE.Color(1.8, 1.3, 0.3),
+  blue: new THREE.Color(0.5, 1.2, 2.0),
+  red: new THREE.Color(2.0, 0.5, 0.4),
+  purple: new THREE.Color(1.3, 0.6, 2.0),
+  green: new THREE.Color(0.6, 1.8, 0.6),
+  white: new THREE.Color(1, 1, 1),
+  smoke: new THREE.Color(0.95, 0.95, 0.95),
+  dust: new THREE.Color(0.85, 0.78, 0.62),
+  fire: new THREE.Color(2.4, 0.9, 0.2),
+  ice: new THREE.Color(0.85, 0.95, 1.0),
+  shadow: new THREE.Color(0.35, 0.15, 0.55),
+};
+// Little particles that show an enemy's element
+function elementParticle(u) {
+  const p = tmp.copy(u.group.position);
+  p.x += rand(-0.4, 0.4) * u.radius * 2; p.z += rand(-0.4, 0.4) * u.radius * 2;
+  p.y = rand(0.2, u.height) + (u.flying ? 0.7 : 0);
+  switch (u.element) {
+    case 'fire': glow.spawn(p, tmp2.set(rand(-0.2, 0.2), rand(1.5, 2.5), rand(-0.2, 0.2)), C.fire, rand(0.25, 0.4), 0.6, -1); break;
+    case 'poison': glow.spawn(p, tmp2.set(0, rand(0.6, 1.2), 0), C.green, rand(0.2, 0.32), 0.9, -0.5); break;
+    case 'ice': glow.spawn(p, tmp2.set(rand(-0.3, 0.3), 0.3, rand(-0.3, 0.3)), C.blue, rand(0.15, 0.25), 0.8, 0); break;
+    case 'shadow': puff.spawn(p, tmp2.set(rand(-0.2, 0.2), rand(0.8, 1.4), rand(-0.2, 0.2)), C.shadow, rand(0.35, 0.6), 0.8, -0.5); break;
+    case 'swift': glow.spawn(p.setY(rand(0.1, 0.6)), tmp2.set(0, 0.2, 0), C.gold, rand(0.18, 0.28), 0.4, 0); break;
+  }
+}
+
+function burst(p, color, n = 20, speed = 5, size = 0.5, life = 0.6, up = 2) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * TAU, e = Math.random();
+    glow.spawn(p, tmp2.set(Math.cos(a) * speed * e, rand(0.5, 1) * up + Math.random() * speed * 0.5, Math.sin(a) * speed * e), color, size * rand(0.6, 1.2), life * rand(0.6, 1.2), 4);
+  }
+}
+function smoke(p, n = 10, color = C.smoke, size = 0.9) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * TAU;
+    puff.spawn(tmp.set(p.x + rand(-0.3, 0.3), p.y + rand(0, 0.4), p.z + rand(-0.3, 0.3)), tmp2.set(Math.cos(a) * 2, rand(0.5, 2), Math.sin(a) * 2), color, size * rand(0.7, 1.3), rand(0.5, 0.9), -1);
+  }
+}
+
+// Expanding rings on the ground
+const ringGeo = new THREE.RingGeometry(0.85, 1, 48);
+ringGeo.rotateX(-Math.PI / 2);
+const rings = [];
+function groundRing(p, color, size, life = 0.5) {
+  let r = rings.find((x) => x.t <= 0);
+  if (!r) {
+    r = { mesh: new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending })), t: 0 };
+    r.mesh.renderOrder = 4;
+    scene.add(r.mesh);
+    rings.push(r);
+  }
+  r.mesh.position.set(p.x, 0.06, p.z);
+  r.mesh.material.color.copy(color);
+  r.mesh.visible = true;
+  r.t = life; r.life = life; r.size = size;
+}
+function updateRings(dt) {
+  for (const r of rings) {
+    if (r.t <= 0) continue;
+    r.t -= dt;
+    const k = 1 - Math.max(0, r.t) / r.life;
+    r.mesh.scale.setScalar(0.2 + easeOutCubic(k) * r.size);
+    r.mesh.material.opacity = (1 - k);
+    if (r.t <= 0) r.mesh.visible = false;
+  }
+}
+
+// Light beam for merges and spawns
+const beamGeo = new THREE.CylinderGeometry(0.5, 0.9, 8, 24, 1, true);
+beamGeo.translate(0, 4, 0);
+function beam(p, color, life = 0.7) {
+  const m = new THREE.Mesh(beamGeo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+  m.position.set(p.x, 0, p.z);
+  m.renderOrder = 6;
+  scene.add(m);
+  tween(life, (k) => { m.material.opacity = 0.7 * (1 - k); m.scale.set(1 - k * 0.6, 1 + k * 0.4, 1 - k * 0.6); }, () => { scene.remove(m); m.material.dispose(); });
+}
+
+// ============================================================ Floating texts (damage numbers) & flying coins
+const fx = $('fx');
+const floaters = [];
+function floatText(worldPos, text, cls) {
+  const el = document.createElement('div');
+  el.className = 'dmg ' + (cls || '');
+  el.textContent = text;
+  fx.appendChild(el);
+  floaters.push({ el, pos: worldPos.clone(), t: 0, life: 0.9, dx: rand(-20, 20) });
+}
+function updateFloaters(dt) {
+  const w = window.innerWidth, h = window.innerHeight;
+  for (let i = floaters.length - 1; i >= 0; i--) {
+    const f = floaters[i];
+    f.t += dt;
+    const k = f.t / f.life;
+    if (k >= 1) { f.el.remove(); floaters.splice(i, 1); continue; }
+    tmp.copy(f.pos).project(camera);
+    const x = (tmp.x * 0.5 + 0.5) * w + f.dx * k;
+    const y = (-tmp.y * 0.5 + 0.5) * h - 50 * easeOutCubic(k);
+    const sc2 = k < 0.15 ? 0.6 + k / 0.15 * 0.7 : 1.3 - Math.min(0.3, (k - 0.15) * 1.2);
+    f.el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%) scale(${sc2})`;
+    f.el.style.opacity = k > 0.7 ? (1 - k) / 0.3 : 1;
+  }
+}
+function flyCoins(worldPos, count) {
+  const target = document.querySelector('.coins').getBoundingClientRect();
+  tmp.copy(worldPos).project(camera);
+  const sx = (tmp.x * 0.5 + 0.5) * window.innerWidth;
+  const sy = (-tmp.y * 0.5 + 0.5) * window.innerHeight;
+  for (let i = 0; i < count; i++) {
+    const el = document.createElement('div');
+    el.className = 'fly-coin coin-icon';
+    fx.appendChild(el);
+    const ox = rand(-50, 50), oy = rand(-60, 10);
+    const tx = target.left + 20, ty = target.top + 18;
+    const delay = i * 0.05;
+    tween(0.75 + delay, (k) => {
+      const kk = clamp((k * (0.75 + delay) - delay) / 0.75, 0, 1);
+      const a = easeOutCubic(Math.min(1, kk * 2.5));
+      const b = kk < 0.35 ? 0 : (kk - 0.35) / 0.65;
+      const bx = sx + ox * a, by = sy + oy * a;
+      const x = lerp(bx, tx, b * b), y = lerp(by, ty, b * b);
+      el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%) scale(${1 - b * 0.3})`;
+      el.style.opacity = kk === 0 ? 0 : 1;
+    }, () => { el.remove(); bumpCoins(); });
+  }
+}
+
+// ============================================================ Units
+const units = []; // all units on the field
+const ANIMS = {
+  idle: ['Idle', 'Flying_Idle'],
+  move: ['Run', 'Walk', 'Fast_Flying'],
+  attackMelee: ['Punch', 'Bite_Front', 'Headbutt'],
+  attackRanged: ['Punch', 'Headbutt', 'Bite_Front'],
+  hit: ['HitReact', 'HitRecieve'],
+  death: ['Death'],
+  win: ['Dance', 'Yes'],
+};
+function findClip(anims, names) {
+  for (const n of names) { const c = anims.find((a) => a.name === n); if (c) return c; }
+  return null;
+}
+
+// Number badge texture per tier and team
+const badgeCache = new Map();
+// Accessories for monster levels 11-15
+function buildAccessory(kind, color, height, radius) {
+  const g = new THREE.Group();
+  const glowM = (c, i = 1.6) => new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: i, roughness: 0.4 });
+  const top = height * 1.02;
+  if (kind === 'crown') {
+    const gold = glowM(0xffd23a, 0.5);
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.1, 18, 1, true), gold); band.material.side = THREE.DoubleSide; band.position.y = top; g.add(band);
+    for (let j = 0; j < 5; j++) { const a = (j / 5) * TAU; const c = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.26, 6), gold); c.position.set(Math.cos(a) * 0.27, top + 0.15, Math.sin(a) * 0.27); g.add(c); }
+    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.08), glowM(color.getHex())); gem.position.set(0, top + 0.02, 0.3); g.add(gem);
+  } else if (kind === 'halo') {
+    const t = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.055, 10, 36), glowM(0xffe680, 2)); t.rotation.x = Math.PI / 2 - 0.2; t.position.y = top + 0.35; g.add(t);
+    g.userData.spin = t;
+  } else if (kind === 'wings') {
+    for (const sd of [-1, 1]) for (let j = 0; j < 4; j++) { const f = new THREE.Mesh(new THREE.ConeGeometry(0.11, 1.0 - j * 0.14, 6), glowM(j % 2 ? 0xffc23a : 0xff7a1a, 1.4)); f.position.set(sd * (0.45 + j * 0.16), height * 0.62 + j * 0.1, -radius * 0.7); f.rotation.z = sd * (-0.9 + j * 0.12); g.add(f); }
+    g.userData.flap = true;
+  } else if (kind === 'spikes') {
+    for (const sd of [-1, 1]) for (let j = 0; j < 3; j++) { const c = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.42, 6), glowM(0xff3a2a, 1.0)); c.position.set(sd * (radius * 1.1 + j * 0.05), height * 0.72 + j * 0.13, -0.1 - j * 0.1); c.rotation.z = sd * -0.8; g.add(c); }
+  } else if (kind === 'stars') {
+    const orbit = new THREE.Group(); orbit.position.y = height * 0.55; g.add(orbit);
+    for (let j = 0; j < 6; j++) { const a = (j / 6) * TAU; const st = new THREE.Mesh(new THREE.OctahedronGeometry(0.11), glowM(j % 2 ? 0x7af0ff : 0xff6ad8, 2)); st.position.set(Math.cos(a) * (radius + 0.7), Math.sin(j) * 0.35, Math.sin(a) * (radius + 0.7)); orbit.add(st); }
+    g.userData.spin = orbit;
+  }
+  return g;
+}
+
+function badgeTexture(tier, team, element, hidden) {
+  const key = `${tier}${team}${element || ''}${hidden ? 'h' : ''}`;
+  if (badgeCache.has(key)) return badgeCache.get(key);
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  g.beginPath(); g.arc(32, 32, 27, 0, TAU);
+  g.fillStyle = hidden ? '#4a2a7a' : team === 'player' ? (tier >= 11 ? '#' + new THREE.Color(AURA_COLORS[tier]).multiplyScalar(0.75).getHexString() : tier >= 9 ? '#ffb400' : '#2a86e8') : '#e0344a';
+  g.fill();
+  g.lineWidth = element ? 7 : 5; g.strokeStyle = element ? ELEMENTS[element].css : '#fff'; g.stroke();
+  g.fillStyle = '#fff'; g.font = '900 34px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(hidden ? '?' : String(tier), 32, 34);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  badgeCache.set(key, t);
+  return t;
+}
+
+const hpGeo = new THREE.PlaneGeometry(1.3, 0.2);
+class Unit {
+  constructor(opts) {
+    Object.assign(this, opts); // team, type, tier, row, col, model, isBoss, flying
+    this.alive = true;
+    this.group = new THREE.Group();
+    this.inner = new THREE.Group();
+    this.group.add(this.inner);
+    this.cooldown = rand(0.1, 0.5);
+    this.pendingHit = -1;
+    this.retarget = 0;
+    this.flash = 0;
+    this.bob = rand(0, TAU);
+    this.stun = 0;
+    this.knock = new THREE.Vector3();
+  }
+
+  async init() {
+    const t = await loadModel(monsterPath(this.model));
+    const obj = cloneSkinned(t.scene);
+    const height = Math.min(this.final ? 5.6 : 4.2, this.height * (this.model.startsWith('Big_') || procBig(this.model) ? 1.3 : 1));
+    this.height = height;
+    const s = height / Math.max(t.size.y, t.size.x * 0.72);
+    obj.scale.setScalar(s);
+    obj.position.set(-t.center.x * s, -t.minY * s, -t.center.z * s);
+    this.inner.add(obj);
+    this.radius = Math.max(0.45, Math.min(t.size.x, t.size.z) * s * 0.42);
+    // Own materials so hits can flash one unit
+    this.mats = [];
+    obj.traverse((o) => {
+      if (o.isMesh) {
+        o.material = o.material.clone();
+        o.frustumCulled = false;
+        this.mats.push(o.material);
+      }
+    });
+    // Resting glow of every material (procedural eyes, lava cracks, auras, elements)
+    const elem = this.element ? new THREE.Color(ELEMENTS[this.element].color) : null;
+    for (const m of this.mats) {
+      if (!m.emissive) { if (elem && m.color && !m.isMeshBasicMaterial) m.color.lerp(elem, 0.28); continue; } // unlit parts (pumpkin face)
+      const base = m.emissive.clone().multiplyScalar(m.emissiveIntensity ?? 1);
+      if (this.aura) base.add(new THREE.Color(this.aura).multiplyScalar(0.35));
+      if (elem && m.color) { m.color.lerp(elem, 0.28); base.add(elem.clone().multiplyScalar(0.16)); }
+      m.baseEm = base;
+      m.emissive.copy(base);
+      m.emissiveIntensity = 1;
+    }
+    // Levels 9+: aura ring; levels 11+: an accessory (crown, fire wings, halo, spikes, star orbit)
+    if (this.tier >= 9 && !this.isBoss) {
+      const ac = new THREE.Color(AURA_COLORS[this.tier] || 0xffc93c);
+      this.auraRing = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: ac.clone().multiplyScalar(1.4), transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending }));
+      this.auraRing.position.y = 0.04; this.auraRing.scale.setScalar(this.radius * 2.3 + 0.4); this.auraRing.renderOrder = 3;
+      this.group.add(this.auraRing);
+      if (TIER_ACCESSORY[this.tier]) { this.acc = buildAccessory(TIER_ACCESSORY[this.tier], ac, height, this.radius); this.inner.add(this.acc); }
+    }
+    // Element ring on the ground
+    if (elem) {
+      this.elemRing = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: elem.clone().multiplyScalar(1.6), transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending }));
+      this.elemRing.position.y = 0.05;
+      this.elemRing.scale.setScalar(this.radius * 2.1 + 0.3);
+      this.elemRing.renderOrder = 3;
+      this.group.add(this.elemRing);
+      this.elemColor = elem.clone().multiplyScalar(1.8);
+      this.fxTimer = rand(0, 0.2);
+    }
+    // Animations
+    this.mixer = new THREE.AnimationMixer(obj);
+    const A = t.animations;
+    this.clips = {
+      idle: findClip(A, ANIMS.idle),
+      move: findClip(A, ANIMS.move),
+      attack: findClip(A, this.type === 'ranged' ? ANIMS.attackRanged : ANIMS.attackMelee),
+      hit: findClip(A, ANIMS.hit),
+      death: findClip(A, ANIMS.death),
+      win: findClip(A, ANIMS.win),
+    };
+    this.actions = {};
+    for (const [k, c] of Object.entries(this.clips)) if (c) this.actions[k] = this.mixer.clipAction(c);
+    if (this.actions.death) { this.actions.death.setLoop(THREE.LoopOnce); this.actions.death.clampWhenFinished = true; }
+    if (this.actions.attack) this.actions.attack.setLoop(THREE.LoopOnce);
+    if (this.actions.hit) this.actions.hit.setLoop(THREE.LoopOnce);
+    this.play('idle', 0);
+    this.mixer.update(rand(0, 1));
+
+    // HP bar (shown in battle)
+    this.hpBar = new THREE.Group();
+    const bg = new THREE.Mesh(hpGeo, new THREE.MeshBasicMaterial({ color: 0x1a1030, depthTest: false, transparent: true, opacity: 0.8 }));
+    this.hpFill = new THREE.Mesh(hpGeo, new THREE.MeshBasicMaterial({ color: this.team === 'player' ? 0x5fe03a : 0xff4848, depthTest: false }));
+    bg.scale.set(this.isBoss ? 2.4 : 1.05, this.isBoss ? 1.6 : 1, 1);
+    this.hpFill.scale.copy(bg.scale).multiply(new THREE.Vector3(0.94, 0.7, 1));
+    this.hpFill.position.z = 0.001;
+    bg.renderOrder = 20; this.hpFill.renderOrder = 21;
+    this.hpBar.add(bg, this.hpFill);
+    this.hpBar.position.y = height + (this.flying ? 1.0 : 0.35);
+    this.hpBar.visible = false;
+    this.group.add(this.hpBar);
+    // Tier badge (shown while preparing)
+    if (!this.isBoss) {
+      this.badge = new THREE.Sprite(new THREE.SpriteMaterial({ map: badgeTexture(this.tier, this.team, this.element, this.hidden), depthTest: false }));
+      this.badge.scale.setScalar(0.62);
+      this.badge.position.y = height + (this.flying ? 1.05 : 0.45);
+      this.badge.renderOrder = 22;
+      this.group.add(this.badge);
+    }
+    return this;
+  }
+
+  play(name, fade = 0.2) {
+    const a = this.actions[name] || (name === 'move' ? this.actions.idle : null);
+    if (!a || this.current === a) return a;
+    a.reset();
+    a.enabled = true;
+    a.setEffectiveWeight(1);
+    if (this.current) a.crossFadeFrom(this.current, fade, false);
+    a.play();
+    this.current = a;
+    return a;
+  }
+
+  setHp(v) {
+    this.hp = clamp(v, 0, this.maxHp);
+    const k = this.hp / this.maxHp;
+    this.hpFill.scale.x = Math.max(0.0001, 0.94 * k * (this.isBoss ? 2.4 : 1.05));
+    this.hpFill.position.x = -(1 - k) * 0.5 * 0.94 * (this.isBoss ? 2.4 : 1.05);
+  }
+}
+
+async function createUnit(opts) {
+  const isPlayer = opts.team === 'player';
+  let model, aura = null, flying = false;
+  if (opts.isBoss) {
+    model = opts.model;
+    flying = !!opts.flying;
+  } else if (isPlayer) {
+    const info = tierInfo(opts.type, opts.tier);
+    model = info.model;
+    aura = AURA_COLORS[opts.tier] || null;
+    flying = opts.type === 'ranged';
+  } else {
+    model = opts.model || enemyModel(opts.type, opts.tier, opts.seed || 0);
+    flying = model.startsWith('Flying') || procFlying(model);
+  }
+  if (opts.isBoss && procFlying(model)) flying = true;
+  const stats = { ...(opts.isBoss ? bossStats(opts.budget) : unitStats(opts.type, opts.tier)) };
+  // Element twists change the numbers too
+  let powerMul = 1;
+  switch (opts.element) {
+    case 'swift': stats.speed *= 1.55; stats.interval *= 0.75; stats.hp = Math.round(stats.hp * 0.85); break;
+    case 'shadow': stats.dmg = Math.round(stats.dmg * 1.15); powerMul = 1.12; break;
+    case 'ice': powerMul = 1.25; break;
+    case 'fire': powerMul = 1.22; break;
+    case 'poison': powerMul = 1.2; break;
+  }
+  if (opts.final) { stats.splash = 3.4; stats.range = 3.0; }
+  const height = opts.isBoss ? (opts.final ? 4.3 : 4.4) : unitHeight(opts.type, opts.tier);
+  const u = new Unit({ ...opts, model, aura, flying, stats, height, maxHp: stats.hp, hp: stats.hp, powerMul, dots: [], slow: 0 });
+  await u.init();
+  u.home = cellPos(u.team, u.row, u.col);
+  if (u.isBoss) u.home = new THREE.Vector3(0, 0, u.final ? -5.4 : -4);
+  u.group.position.copy(u.home);
+  u.group.rotation.y = isPlayer && state === 'battle' ? Math.PI : 0;
+  scene.add(u.group);
+  units.push(u);
+  return u;
+}
+
+function removeUnit(u) {
+  scene.remove(u.group);
+  const i = units.indexOf(u);
+  if (i >= 0) units.splice(i, 1);
+  if (u.mixer) { u.mixer.stopAllAction(); u.mixer.uncacheRoot(u.mixer.getRoot()); }
+  // Free the per-unit materials (geometry and textures are shared with the template)
+  for (const m of u.mats || []) m.dispose();
+  for (const o of [u.hpBar, u.auraRing, u.elemRing, u.badge]) if (o) o.traverse((c) => { if (c.material) c.material.dispose(); });
+}
+
+const playerUnits = () => units.filter((u) => u.team === 'player');
+const enemyUnits = () => units.filter((u) => u.team === 'enemy');
+const unitAt = (team, row, col) => units.find((u) => u.team === team && u.row === row && u.col === col && u.alive);
+
+// Pop-in animation for a new or merged unit
+function popIn(u, from = 0.2) {
+  u.group.scale.setScalar(from);
+  tween(0.45, (k) => u.group.scale.setScalar(lerp(from, 1, easeOutBack(k))));
+}
+function dropIn(u) {
+  const y0 = 7;
+  u.group.position.y = y0;
+  tween(0.45, (k) => { u.group.position.y = y0 * (1 - k * k); }, () => {
+    u.group.position.y = 0;
+    smoke(u.group.position, 8, C.dust, 0.7);
+    groundRing(u.group.position, C.white, 1.6, 0.35);
+    audio.play('place', { volume: 0.5 });
+    tween(0.25, (k) => { const s = 1 + Math.sin(k * Math.PI) * 0.18; u.group.scale.set(s, 2 - s, s); }, () => u.group.scale.setScalar(1));
+  });
+}
+
+// ============================================================ Army helpers
+function savedBoard() {
+  return playerUnits().filter((u) => u.alive).map((u) => ({ type: u.type, tier: u.tier, row: u.row, col: u.col }));
+}
+function armyPower(list) {
+  // Lanchester-style strength: sqrt(total HP x total DPS)
+  let hp = 0, dps = 0;
+  for (const u of list) { const k = u.powerMul || 1; hp += u.stats.hp * Math.sqrt(k); dps += ((u.stats.dmg + (u.stats.heal || 0) * 0.7) / u.stats.interval) * Math.sqrt(k); }
+  return Math.round(Math.sqrt(hp * dps) / 4);
+}
+function updatePower() {
+  $('powerYou').textContent = formatNum(armyPower(playerUnits()));
+  const hide = currentLevel && currentLevel.hidePower && state !== 'battle' && state !== 'result';
+  $('powerFoe').textContent = hide ? '???' : formatNum(armyPower(enemyUnits()));
+  $('powerBar').classList.toggle('mystery', !!hide);
+}
+function formatNum(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e4) return (n / 1e3).toFixed(1) + 'K';
+  return String(n);
+}
+function emptyPlayerCells() {
+  const out = [];
+  for (let row = 0; row < ROWS; row++) for (let col = 0; col < COLS; col++) if (!unitAt('player', row, col)) out.push({ row, col });
+  return out;
+}
+
+// Preload the models a player is likely to need soon
+function preloadPlayerTiers() {
+  for (const line of LINE_KEYS) {
+    if (line === 'mage' && save.level < MAGE_UNLOCK) continue;
+    const top = Math.max(1, save.discovered[line] || 1);
+    for (let t = 1; t <= Math.min(MAX_TIER, top + 1, 8); t++) loadModel(monsterPath(tierInfo(line, t).model));
+  }
+}
+
+// ============================================================ Level flow
+// The enemy army is sized once per level from your army and coins, then kept for retries
+function foeBudget() {
+  if (!save.foe || save.foe.level !== save.level) {
+    const army = save.board.reduce((n, b) => n + unitValue(b.tier), 0);
+    save.foe = { level: save.level, budget: enemyBudget(save.level, army, coinUnits(save.coins, save.buys), FINAL), losses: 0 };
+  }
+  return Math.max(2, Math.round(save.foe.budget * mercy(save.foe.losses, save.level, FINAL)));
+}
+function currentArmy() { return buildLevel(save.level, foeBudget(), { final: FINAL }); }
+// Models the final fight summons mid-battle are loaded up front
+function preloadFinal() { for (const m of ['P_Slime_Shadow', 'P_Bat_Eye']) loadModel(monsterPath(m)); }
+
+const bossOpts = (b) => ({ team: 'enemy', type: 'melee', tier: 1, row: 1, col: 2, isBoss: true, model: b.model, flying: b.flying, budget: b.budget, element: b.element, final: !!b.final });
+async function setupLevel() {
+  state = 'loading-level';
+  // Clear enemies
+  for (const u of enemyUnits()) removeUnit(u);
+  save.board = savedBoard().length ? savedBoard() : save.board;
+  const L = currentArmy();
+  currentLevel = L;
+  // New arena every 10 levels
+  const ti = tIdx(save.level);
+  const newArena = ti !== themeNow;
+  if (newArena) {
+    const fl = $('flash');
+    fl.classList.remove('go'); void fl.offsetWidth; fl.classList.add('go');
+    await new Promise((r) => setTimeout(r, 180));
+    await applyTheme(ti);
+  }
+  if (L.final) preloadFinal();
+  const jobs = L.units.map((e) => createUnit({ team: 'enemy', ...e }));
+  let boss = null;
+  if (L.boss) jobs.push(createUnit(bossOpts(L.boss)).then((b) => { boss = b; b.bossName = L.boss.name; }));
+  const created = await Promise.all(jobs);
+  for (const u of created) { if (u && !u.isBoss) popIn(u, 0.01); }
+  updateLevelUI();
+  updatePower();
+  state = 'prep';
+  updateShopUI();
+  setMusic();
+  showBottom(true);
+  if (newArena || (save.level - 1) % 10 === 0) await arenaIntro();
+  if (!save.guideSeen) await openGuide();
+  await maybeUnlocks();
+  await maybeElementCard(L);
+  if (L.boss) await bossIntro(boss);
+  else showBanner(`LEVEL ${save.level}`);
+  maybeHint();
+  preloadPlayerTiers();
+}
+
+// ============================================================ How to play
+const thumbImg = (model, label, sub) => {
+  const id = 'g' + Math.random().toString(36).slice(2);
+  thumbnail(model).then((url) => { const el = document.getElementById(id); if (el) el.src = url; });
+  return `<div class="g-mon"><img id="${id}" alt="">${label ? `<span>${label}</span>` : ''}${sub ? `<small>${sub}</small>` : ''}</div>`;
+};
+const GUIDE = [
+  {
+    title: 'MERGE TO EVOLVE',
+    art: () => `<div class="g-row">${thumbImg('Blob_PinkBlob', 'Lv 1')}<b>+</b>${thumbImg('Blob_PinkBlob', 'Lv 1')}<b>${icon('arrow')}</b>${thumbImg('Blob_GreenBlob', 'Lv 2')}</div>`,
+    text: 'Drag a monster onto the <b>SAME</b> monster to merge them. Each level is about <b>twice as strong</b>!',
+  },
+  {
+    title: 'BUILD YOUR ARMY',
+    art: () => `<div class="g-row">${thumbImg('Big_Orc', icon('sword') + ' BRAWLER', 'goes in FRONT')}${thumbImg('Flying_Dragon', icon('wing') + ' FLYER', 'stays BEHIND')}</div>`,
+    text: '<b>Brawlers</b> hit up close: put them in front. <b>Flyers</b> shoot from far: keep them safe at the back. Drag monsters to move them.',
+  },
+  {
+    title: 'FIGHT SMART',
+    art: () => `<div class="g-power"><span class="y"><small>YOU</small>120</span>VS<span class="f"><small>ENEMY</small>150</span></div>`,
+    text: 'Compare <b>YOUR</b> power with the <b>ENEMY</b> power, then tap FIGHT! Every fight is tough. Lost? Keep 30% coins, and the <b>same enemy gets weaker</b> each try.',
+  },
+  {
+    title: 'ELEMENT ENEMIES',
+    art: () => `<div class="g-elems">${Object.values(ELEMENTS).map((e) => `<div class="g-elem" style="--c:${e.css}"><em>${icon(e.icon)}</em><div><b>${e.name}</b>${e.short}</div></div>`).join('')}<div class="g-elem" style="--c:#ff6ad8"><em>${icon('cosmic')}</em><div><b>COSMIC</b>All of them!</div></div></div>`,
+    text: 'Enemies with a <b>glowing ring</b> have element powers. Take them out first!',
+  },
+  {
+    title: 'SECRETS & TIPS',
+    art: () => `<div class="g-tips">
+      <div class="g-tip"><em><span class="g-q">?</span></em>Hidden enemy level. Be ready!</div>
+      <div class="g-tip"><em>${icon('trash')}</em>Drag to the bin to sell</div>
+      <div class="g-tip"><em>${icon('gift')}</em>Free monster every level</div>
+      <div class="g-tip"><em>${icon('skull')}</em>Boss every 10 levels</div>
+      <div class="g-tip"><em>${icon('chest')}</em>Treasure every 5 levels</div>
+      <div class="g-tip"><em>${icon('map')}</em>New arena every 10 levels</div></div>`,
+    text: 'From level 15 the <b>ENEMY power</b> can be <b>???</b>. Trust your army!',
+  },
+];
+let guidePage = 0, guideDone = null;
+function renderGuide() {
+  const g = GUIDE[guidePage];
+  $('guideTitle').textContent = g.title;
+  $('guideArt').innerHTML = g.art();
+  $('guideText').innerHTML = g.text;
+  $('guideDots').innerHTML = GUIDE.map((_, i) => `<i class="${i === guidePage ? 'on' : ''}"></i>`).join('');
+  $('guideBack').style.visibility = guidePage ? 'visible' : 'hidden';
+  $('guideNext').textContent = guidePage === GUIDE.length - 1 ? "LET'S GO!" : 'NEXT';
+}
+function openGuide() {
+  guidePage = 0;
+  renderGuide();
+  showScreen('guide', true);
+  return new Promise((r) => { guideDone = r; });
+}
+function closeGuide() {
+  showScreen('guide', false);
+  if (!save.guideSeen) { save.guideSeen = true; persist(); }
+  if (guideDone) { const d = guideDone; guideDone = null; d(); }
+}
+
+// First time an element shows up: explain it
+async function maybeElementCard(L) {
+  if (!save.elemSeen) save.elemSeen = {};
+  const arena = ARENAS[arenaIndex(save.level)];
+  const found = [...L.units.map((u) => u.element), L.boss && L.boss.element].filter(Boolean);
+  let key = null;
+  if (arena.element === 'cosmic' && found.length) key = save.elemSeen.cosmic ? null : 'cosmic';
+  else key = found.find((e) => !save.elemSeen[e]) || null;
+  if (!key) return;
+  save.elemSeen[key] = true;
+  persist();
+  const e = key === 'cosmic'
+    ? { name: 'COSMIC', icon: 'cosmic', css: '#ff6ad8', desc: 'COSMIC enemies can have ANY element power!', tip: 'Watch the ring colors and use everything you learned.' }
+    : ELEMENTS[key];
+  const card = $('elemCard');
+  card.style.setProperty('--c', e.css);
+  $('elemIcon').innerHTML = icon(e.icon);
+  $('elemName').textContent = e.name;
+  $('elemDesc').textContent = e.desc;
+  $('elemTip').innerHTML = icon('bulb') + ' ' + e.tip;
+  audio.play('levelup', { volume: 0.6, vary: 0 });
+  showScreen('elemCard', true);
+  await new Promise((r) => { elemCardDone = r; });
+}
+let elemCardDone = null;
+
+// Big title card for a new arena, with its twist
+async function arenaIntro() {
+  const th = THEMES[tIdx(save.level)];
+  const el = $('arenaIntro');
+  $('arenaName').textContent = th.name;
+  el.querySelector('small').textContent = isFinalLevel(save.level) ? 'FINAL BATTLE' : 'NEW ARENA';
+  $('arenaTwist').textContent = isFinalLevel(save.level) ? 'The Last Monarch and his Royal Guard await. No mercy. No skips.'
+    : save.level <= 3 ? 'Every fight is tough. Merge smart to survive!' : arenaTwist(save.level);
+  el.classList.remove('hidden');
+  el.style.animation = 'none'; void el.offsetWidth; el.style.animation = '';
+  audio.play('bell', { volume: 0.7, vary: 0 });
+  camZoom = { pos: new THREE.Vector3(9, 12, 14), look: new THREE.Vector3(0, 0, -2), k: 0 };
+  tween(0.9, (k) => { if (camZoom) camZoom.k = Math.sin(k * Math.PI * 0.5); });
+  await wait(2.2);
+  tween(0.6, (k) => { if (camZoom) camZoom.k = 1 - easeOutCubic(k); }, () => { camZoom = null; });
+  await wait(0.5);
+  el.classList.add('hidden');
+}
+
+async function bossIntro(boss) {
+  if (boss.final) return eternusIntro(boss);
+  audio.play('bell', { volume: 0.9, vary: 0 });
+  camZoom = { pos: new THREE.Vector3(0, 6, 4), look: new THREE.Vector3(0, 2, -4), k: 0 };
+  tween(0.6, (k) => { if (camZoom) camZoom.k = easeOutCubic(k); });
+  boss.group.scale.setScalar(0.2);
+  tween(0.6, (k) => boss.group.scale.setScalar(lerp(0.2, 1, easeOutBack(k))));
+  shake = 0.5;
+  const el = $('bossName');
+  el.textContent = boss.bossName;
+  el.classList.remove('hidden');
+  el.style.animation = 'none'; void el.offsetWidth; el.style.animation = '';
+  await wait(1.8);
+  tween(0.6, (k) => { if (camZoom) camZoom.k = 1 - easeOutCubic(k); }, () => { camZoom = null; });
+  setTimeout(() => el.classList.add('hidden'), 700);
+}
+
+async function eternusIntro(boss) {
+  audio.play('slam', { volume: 1, vary: 0 });
+  audio.play('bell', { volume: 0.9, vary: 0, rate: 0.7 });
+  camZoom = { pos: new THREE.Vector3(0, 4.2, 3.2), look: new THREE.Vector3(0, 3.2, -5.4), k: 0 };
+  tween(1.0, (k) => { if (camZoom) camZoom.k = easeOutCubic(k); });
+  const y0 = -5;
+  boss.group.position.y = y0;
+  tween(1.6, (k) => { boss.group.position.y = y0 * (1 - easeOutCubic(k)); }, () => { boss.group.position.y = 0; });
+  shake = 1.2;
+  for (let i = 0; i < 4; i++) setTimeout(() => { groundRing(boss.group.position, C.purple, 4 + i * 1.5, 0.6); smoke(boss.group.position, 10, C.shadow, 2); }, i * 300);
+  await wait(1.4);
+  if (boss.actions.win) boss.play('win', 0.2);
+  const el = $('bossName');
+  el.innerHTML = '<small>FINAL BOSS</small>VOIDLORD ETERNUS';
+  el.classList.add('final');
+  el.classList.remove('hidden');
+  el.style.animation = 'none'; void el.offsetWidth; el.style.animation = '';
+  await wait(2.6);
+  boss.play('idle', 0.3);
+  tween(0.8, (k) => { if (camZoom) camZoom.k = 1 - easeOutCubic(k); }, () => { camZoom = null; });
+  setTimeout(() => { el.classList.add('hidden'); el.classList.remove('final'); el.textContent = ''; }, 900);
+}
+
+function maybeHint() {
+  const hint = $('hint');
+  if (save.level === 1 && !hintShown) {
+    hint.innerHTML = icon('hand') + ' Drag a monster onto the SAME monster to MERGE!';
+    hint.classList.remove('hidden');
+  } else if (save.level === 2 && !hintShown) {
+    hint.textContent = 'Buy more monsters, merge them, then tap FIGHT!';
+    hint.classList.remove('hidden');
+  } else hint.classList.add('hidden');
+}
+
+function updateLevelUI() {
+  $('levelNum').textContent = save.level;
+  $('legendTag').classList.toggle('hidden', !save.legend);
+  const road = $('road');
+  road.innerHTML = '';
+  const start = Math.floor((save.level - 1) / 10) * 10 + 1;
+  for (let l = start; l < start + 10; l++) {
+    const i = document.createElement('i');
+    if (l % 10 === 0) { i.className = isFinalLevel(l) ? 'boss final' : 'boss'; i.innerHTML = icon('skull'); }
+    else if (l % 5 === 0) i.className = 'chest';
+    if (l < save.level) i.classList.add('done');
+    if (l === save.level) i.classList.add('now');
+    road.appendChild(i);
+  }
+  updateShopUI();
+}
+
+function updateShopUI() {
+  $('coinNum').textContent = formatNum(save.coins);
+  const pm = buyPrice(save.buys.melee), pr = buyPrice(save.buys.ranged), pg = buyPrice(save.buys.mage || 0);
+  $('priceMelee').textContent = formatNum(pm);
+  $('priceRanged').textContent = formatNum(pr);
+  $('priceMage').textContent = formatNum(pg);
+  const full = emptyPlayerCells().length === 0;
+  $('buyMelee').classList.toggle('poor', save.coins < pm || full);
+  $('buyRanged').classList.toggle('poor', save.coins < pr || full);
+  $('buyMage').classList.toggle('hidden', save.level < MAGE_UNLOCK);
+  $('buyMage').classList.toggle('poor', save.coins < pg || full);
+  $('buyMage').classList.toggle('new', save.level >= MAGE_UNLOCK && !(save.discovered.mage > 0));
+  $('freeBtn').classList.toggle('hidden', !platform.hasRewarded || full || save.freeUsedLevel === save.level || state !== 'prep');
+}
+
+function showBottom(on) {
+  $('bottom').classList.toggle('hidden', !on);
+  $('powerBar').classList.toggle('hidden', !on);
+}
+
+function setMusic() {
+  if (state === 'battle') audio.playMusic(currentLevel && currentLevel.boss ? 'music_battle' : 'music_battle', 0.4);
+  else audio.playMusic('music_prep', 0.28);
+}
+
+// ============================================================ Buying & merging
+async function buy(type, free = false, tierOverride = 1) {
+  if (state !== 'prep') return;
+  const cells = emptyPlayerCells();
+  if (!cells.length) { audio.play('denied'); flashFull(); return; }
+  const price = buyPrice(save.buys[type]);
+  if (!free) {
+    if (save.coins < price) { audio.play('denied'); shakeButton({ melee: 'buyMelee', ranged: 'buyRanged', mage: 'buyMage' }[type]); return; }
+    save.coins -= price;
+    save.buys[type]++;
+  }
+  // Brawlers prefer the front, flyers the back
+  // Brawlers prefer the front, flyers the back, mages the middle
+  const rowScore = (c) => (type === 'melee' ? c.row : type === 'ranged' ? -c.row : Math.abs(c.row - 1) * 2 + (c.row === 0 ? 1 : 0));
+  cells.sort((a, b) => rowScore(a) - rowScore(b) || Math.abs(a.col - 2) - Math.abs(b.col - 2));
+  const cell = cells[0];
+  audio.play('coins', { volume: 0.6 });
+  const u = await createUnit({ team: 'player', type, tier: tierOverride, row: cell.row, col: cell.col });
+  dropIn(u);
+  discover(type, tierOverride, u, false);
+  updateShopUI();
+  updatePower();
+  persist();
+}
+
+function flashFull() {
+  showBanner('BOARD FULL! MERGE!', 'red');
+}
+function shakeButton(id) {
+  const el = $(id);
+  el.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-8px)' }, { transform: 'translateX(8px)' }, { transform: 'translateX(0)' }], { duration: 250 });
+}
+
+async function merge(a, b) {
+  // a is dragged onto b
+  const type = b.type, tier = b.tier + 1, row = b.row, col = b.col;
+  const pos = b.group.position.clone();
+  a.alive = false; b.alive = false;
+  // Suck both into the cell center
+  const aStart = a.group.position.clone();
+  tween(0.18, (k) => { a.group.position.lerpVectors(aStart, pos, k); a.group.scale.setScalar(1 - k * 0.6); b.group.scale.setScalar(1 - k * 0.6); });
+  await wait(0.18);
+  removeUnit(a); removeUnit(b);
+  audio.play('merge', { volume: 0.8, vary: 0 });
+  audio.play('bell', { volume: 0.25, rate: 1 + tier * 0.05, vary: 0 });
+  burst(pos.clone().setY(1), tier >= 5 ? C.gold : C.blue, 30 + tier * 4, 6, 0.6, 0.7, 4);
+  groundRing(pos, C.gold, 2.4);
+  beam(pos, tier >= 5 ? 0xffd040 : 0x7fd0ff);
+  shake = Math.max(shake, 0.15 + tier * 0.03);
+  const u = await createUnit({ team: 'player', type, tier, row, col });
+  popIn(u, 0.3);
+  hintShown = true;
+  $('hint').classList.add('hidden');
+  updatePower();
+  updateShopUI();
+  persist();
+  discover(type, tier, u, true);
+}
+
+// First time a tier is reached: celebration card with a 3D portrait
+async function discover(type, tier, unit, celebrate) {
+  if ((save.discovered[type] || 0) >= tier) return;
+  save.discovered[type] = tier;
+  persist();
+  preloadPlayerTiers();
+  if (!celebrate || tier < 2) return;
+  timeScale = 0.3;
+  camZoom = { pos: unit.group.position.clone().add(new THREE.Vector3(0, 6.5, 8.5)), look: unit.group.position.clone().setY(1), k: 0 };
+  tween(0.35, (k) => { if (camZoom) camZoom.k = easeOutCubic(k); });
+  const info = tierInfo(type, tier);
+  $('newMonImg').src = await thumbnail(info.model, AURA_COLORS[tier]);
+  $('newMonName').textContent = info.name;
+  $('newMonTier').textContent = `${LINES[type].name} · Level ${tier}`;
+  document.querySelector('#newMon .ribbon').textContent = 'NEW MONSTER!';
+  audio.play('levelup', { volume: 0.8, vary: 0 });
+  setTimeout(() => showScreen('newMon', true), 450);
+}
+
+// ============================================================ Dragging
+const raycaster = new THREE.Raycaster();
+const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const ndc = new THREE.Vector2();
+let drag = null; // { unit, offset }
+let highlight = null;
+
+function groundPoint(e, out) {
+  ndc.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  return raycaster.ray.intersectPlane(groundPlane, out);
+}
+function pickUnit(e) {
+  ndc.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  // Ray against each player unit's bounding sphere, then fall back to the cell under the finger
+  let best = null, bestD = Infinity;
+  for (const u of playerUnits()) {
+    if (!u.alive) continue;
+    tmp.copy(u.group.position).setY(u.height * 0.5 + (u.flying ? 0.6 : 0));
+    const d = raycaster.ray.distanceSqToPoint(tmp);
+    const r = Math.max(0.9, u.height * 0.55);
+    if (d < r * r) {
+      const dc = raycaster.ray.origin.distanceTo(tmp);
+      if (dc < bestD) { bestD = dc; best = u; }
+    }
+  }
+  if (best) return best;
+  if (groundPoint(e, tmp)) { const c = posToCell(tmp); if (c) return unitAt('player', c.row, c.col); }
+  return null;
+}
+function setHighlight(cell, ok) {
+  for (const m of cellMarkers.player) {
+    const on = cell && m.row === cell.row && m.col === cell.col;
+    m.mesh.material.opacity = on ? 0.75 : 0.22;
+    m.mesh.material.color.setHex(on ? (ok ? 0x7dff6a : 0xffd84a) : 0x4fb8ff);
+  }
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  audio.unlock();
+  if (state === 'chest') { tapChest(e); return; }
+  if (state !== 'prep' || paused) return;
+  const u = pickUnit(e);
+  if (!u) return;
+  drag = { unit: u, start: u.group.position.clone(), moved: false, pointerId: e.pointerId };
+  const bin = $('sellBin');
+  $('sellValue').textContent = formatNum(sellValue(u.type, u.tier, save.buys[u.type]));
+  bin.classList.toggle('locked', playerUnits().filter((o) => o.alive).length <= 1);
+  bin.classList.remove('hidden', 'hot');
+  $('bottom').classList.add('hidden');
+  canvas.setPointerCapture(e.pointerId);
+  u.play('move');
+  tween(0.12, (k) => u.group.scale.setScalar(1 + 0.15 * k));
+  audio.play('pickup', { volume: 0.5 });
+  // Show which monsters can merge with it
+  for (const o of playerUnits()) if (o !== u && o.type === u.type && o.tier === u.tier && u.tier < tierCap(save.level)) o.mergeGlow = true;
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  $('sellBin').classList.toggle('hot', overBin(e));
+  if (!groundPoint(e, tmp)) return;
+  const u = drag.unit;
+  tmp.z += 0.6; // keep the monster visible above the finger
+  u.group.position.set(clamp(tmp.x, -6, 6), 1.1, clamp(tmp.z, -1, 9.5));
+  drag.moved = true;
+  const c = posToCell(u.group.position);
+  const other = c && unitAt('player', c.row, c.col);
+  const mergeable = other && other !== u && other.type === u.type && other.tier === u.tier && u.tier < tierCap(save.level);
+  setHighlight(c, mergeable || !other || other === u);
+});
+function endDrag(e) {
+  if (!drag) return;
+  const u = drag.unit;
+  drag = null;
+  for (const o of playerUnits()) o.mergeGlow = false;
+  setHighlight(null);
+  const droppedOnBin = overBin(e);
+  $('sellBin').classList.add('hidden');
+  if (state === 'prep') $('bottom').classList.remove('hidden');
+  if (droppedOnBin) {
+    if (playerUnits().filter((o) => o.alive).length <= 1) { audio.play('denied'); showBanner('KEEP AT LEAST ONE!', 'red'); }
+    else { try { canvas.releasePointerCapture(e.pointerId); } catch {} sellUnit(u); return; }
+  }
+  try { canvas.releasePointerCapture(e.pointerId); } catch {}
+  u.play('idle');
+  const c = posToCell(u.group.position);
+  const back = () => {
+    const from = u.group.position.clone();
+    const to = cellPos('player', u.row, u.col);
+    tween(0.18, (k) => { u.group.position.lerpVectors(from, to, k); u.group.scale.setScalar(1.15 - 0.15 * k); });
+  };
+  if (!c) { back(); return; }
+  const other = unitAt('player', c.row, c.col);
+  if (other === u || (!other && c.row === u.row && c.col === u.col)) { back(); return; }
+  if (other && other.type === u.type && other.tier === u.tier) {
+    if (u.tier < tierCap(save.level)) { merge(u, other); return; }
+    // At the level cap: tell the player when the next level unlocks
+    const next = u.tier + 1;
+    if (next <= MAX_TIER) showBanner(`REACH LEVEL ${TIER_UNLOCK[next]} FOR ${TIER_TITLES[next].toUpperCase()}!`, 'red');
+    else showBanner('MAX LEVEL!', 'gold');
+    audio.play('denied');
+    back(); return;
+  }
+  if (other) {
+    // Swap places
+    other.row = u.row; other.col = u.col;
+    const of = other.group.position.clone(), ot = cellPos('player', other.row, other.col);
+    tween(0.2, (k) => other.group.position.lerpVectors(of, ot, easeOutCubic(k)));
+  }
+  u.row = c.row; u.col = c.col;
+  const from = u.group.position.clone(), to = cellPos('player', c.row, c.col);
+  tween(0.15, (k) => { u.group.position.lerpVectors(from, to, k); u.group.scale.setScalar(1.15 - 0.15 * k); }, () => {
+    smoke(to, 5, C.dust, 0.5);
+    audio.play('drop', { volume: 0.5 });
+  });
+  persist();
+}
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+
+function overBin(e) {
+  const r = $('sellBin').getBoundingClientRect();
+  const pad = 30;
+  return e.clientX > r.left - pad && e.clientX < r.right + pad && e.clientY > r.top - pad && e.clientY < r.bottom + pad;
+}
+
+// Sell a monster for coins to free its square
+function sellUnit(u) {
+  const value = sellValue(u.type, u.tier, save.buys[u.type]);
+  u.alive = false;
+  const p = u.group.position.clone();
+  audio.play('coins2', { volume: 0.8 });
+  smoke(p.clone().setY(0.6), 12);
+  burst(p.clone().setY(1), C.gold, 18, 4, 0.5, 0.5, 3);
+  const s0 = u.group.scale.x;
+  tween(0.25, (k) => u.group.scale.setScalar(s0 * (1 - k)), () => removeUnit(u));
+  flyCoins(p.clone().setY(1), Math.min(8, 2 + u.tier));
+  floatText(p.clone().setY(2), '+' + formatNum(value), 'crit');
+  save.coins += value;
+  setTimeout(() => { updateShopUI(); updatePower(); persist(); }, 300);
+}
+
+// ============================================================ Battle
+// Final boss: scale Eternus and his guard to your army's power when the fight starts
+function scaleFinalFoes() {
+  const foes = enemyUnits();
+  const mine = armyPower(playerUnits()), theirs = armyPower(foes);
+  if (!mine || !theirs) return;
+  const want = mine * (globalThis.__finalR ?? FINAL_RATIO) * mercy(save.foe ? save.foe.losses : 0, FINAL_LEVEL, true);
+  const f = want / theirs;
+  for (const u of foes) {
+    u.stats = { ...u.stats, hp: Math.max(1, Math.round(u.stats.hp * f)), dmg: Math.max(1, Math.round(u.stats.dmg * f)) };
+    u.maxHp = u.stats.hp; u.hp = u.maxHp;
+  }
+  finalScale = f;
+}
+let finalScale = 1;
+function startBattle() {
+  if (state !== 'prep') return;
+  if (!playerUnits().length) { showBanner('BUY A MONSTER!', 'red'); return; }
+  if (currentLevel && currentLevel.final) scaleFinalFoes();
+  state = 'battle';
+  battleTime = 0;
+  hintShown = true;
+  $('hint').classList.add('hidden');
+  showBottom(false);
+  audio.play('fight', { volume: 0.9, vary: 0 });
+  audio.play('bell', { volume: 0.4, vary: 0 });
+  showBanner('FIGHT!', 'gold');
+  setMusic();
+  for (const u of units) {
+    if (u.team === 'player') { const r0 = u.group.rotation.y; tween(0.3, (k) => { u.group.rotation.y = lerp(r0, Math.PI, k); }); }
+    u.hpBar.visible = true;
+    if (u.badge) u.badge.visible = false;
+    u.setHp(u.maxHp);
+    u.dots = []; u.slow = 0; u.stun = 0;
+    u.cooldown = rand(0.2, 0.6);
+    u.target = null;
+  }
+}
+
+function nearestFoe(u) {
+  let best = null, bd = Infinity;
+  for (const o of units) {
+    if (!o.alive || o.team === u.team) continue;
+    const d = o.group.position.distanceToSquared(u.group.position);
+    if (d < bd) { bd = d; best = o; }
+  }
+  return best;
+}
+
+function dealDamage(attacker, target, base, isSplash = false) {
+  if (!target.alive) return;
+  const crit = !isSplash && Math.random() < 0.12;
+  let dmg = Math.round(base * (crit ? 2 : 1) * rand(0.9, 1.1));
+  if (target.element === 'ice') dmg = Math.round(dmg * 0.86); // icy armor
+  if (target.guard) dmg = Math.round(dmg * 0.7); // Void Knight shields
+  if (target.shield > 0) { hitShield(attacker, target, dmg); return; }
+  target.setHp(target.hp - dmg);
+  applyElement(attacker, target, base, dmg);
+  target.flash = 1;
+  const p = target.group.position.clone().setY(target.height * 0.8 + (target.flying ? 0.6 : 0));
+  floatText(p, formatNum(dmg), crit ? 'crit' : target.team === 'player' ? 'enemy' : '');
+  burst(p, crit ? C.gold : C.spark, crit ? 14 : 6, crit ? 5 : 3, 0.35, 0.35, 2);
+  if (crit) { audio.play('crit', { volume: 0.5 }); shake = Math.max(shake, 0.18); }
+  if (target.current !== target.actions.attack && target.actions.hit && Math.random() < 0.5) {
+    target.play('hit', 0.08);
+    target.hitTimer = 0.35;
+  }
+  // Knockback from big hits
+  if (base > target.maxHp * 0.15 || crit) {
+    tmp.subVectors(target.group.position, attacker.group.position).setY(0).normalize().multiplyScalar(crit ? 1.2 : 0.7);
+    target.knock.add(tmp);
+  }
+  if (target.hp <= 0) killUnit(target);
+}
+
+// Element effects on hit
+function applyElement(attacker, target, base, dmg) {
+  switch (attacker.element) {
+    case 'fire':
+      target.dots.push({ t: 2, dps: base * 0.42, kind: 'burn', acc: 0 });
+      break;
+    case 'poison':
+      if (target.dots.filter((d) => d.kind === 'poison').length < 3) target.dots.push({ t: 3, dps: base * 0.17, kind: 'poison', acc: 0 });
+      break;
+    case 'ice':
+      if (target.slow <= 0) burst(target.group.position.clone().setY(target.height * 0.6), C.blue, 8, 2, 0.35, 0.4, 1);
+      target.slow = 1.6;
+      break;
+    case 'shadow':
+      if (attacker.alive) {
+        attacker.setHp(attacker.hp + dmg * 0.35);
+        glow.spawn(attacker.group.position.clone().setY(attacker.height * 0.8), tmp2.set(0, 1.5, 0), C.purple, 0.5, 0.5, 0);
+      }
+      break;
+  }
+}
+// Burn and poison tick every half second
+function updateDots(u, dt) {
+  if (u.shield > 0) { u.dots.length = 0; return; } // the void shield blocks burn and poison
+  for (let i = u.dots.length - 1; i >= 0; i--) {
+    const d = u.dots[i];
+    d.t -= dt; d.acc += dt;
+    if (d.acc >= 0.5 || d.t <= 0) {
+      const dmg = Math.max(1, Math.round(d.dps * d.acc));
+      d.acc = 0;
+      u.setHp(u.hp - dmg);
+      const p = u.group.position.clone().setY(u.height * 0.85 + (u.flying ? 0.6 : 0));
+      floatText(p, formatNum(dmg), d.kind);
+      burst(p, d.kind === 'burn' ? C.fire : C.green, 5, 1.5, 0.35, 0.4, 2);
+      if (u.hp <= 0) { killUnit(u); return; }
+    }
+    if (d.t <= 0) u.dots.splice(i, 1);
+  }
+}
+
+function killUnit(u) {
+  u.alive = false;
+  if (u.team === 'enemy') {
+    if (!save.defeated) save.defeated = {};
+    if (!u.devoured) save.defeated[u.isBoss ? 'boss:' + u.bossName : u.model] = 1;
+  }
+  u.hpBar.visible = false;
+  u.play('death', 0.1);
+  audio.play('die', { volume: 0.6 });
+  const p = u.group.position.clone();
+  tween(0.9, () => {}, () => {
+    if (!u.group.parent) return;
+    smoke(p.clone().setY(0.5 + (u.flying ? 0.5 : 0)), 12);
+    burst(p.clone().setY(0.8), u.team === 'player' ? C.blue : C.purple, 16, 4, 0.5, 0.5, 3);
+    const sx = u.group.scale.x;
+    tween(0.25, (k) => u.group.scale.setScalar(sx * (1 - k)), () => { if (u.team === 'enemy') removeUnit(u); else u.group.visible = false; });
+    if (u.team === 'enemy') flyCoins(p.clone().setY(1), u.isBoss ? 12 : Math.min(5, 1 + Math.floor(u.tier / 2)));
+  });
+  if (u.isBoss) { slowMo(u.final ? 2.4 : 1.2); shake = u.final ? 1.6 : 1; audio.play('slam', { volume: 1 }); }
+  if (u.shieldMesh) { u.group.remove(u.shieldMesh); u.shieldMesh = null; u.shield = 0; }
+}
+
+function slowMo(seconds) {
+  timeScale = 0.3;
+  slowMoTimer = seconds;
+}
+
+// Projectiles for flyers
+const projectiles = [];
+function dropShot(p) { scene.remove(p.mesh); p.mesh.material.dispose(); }
+const orbGeo = new THREE.SphereGeometry(0.22, 12, 8);
+function shoot(from, to, dmg, team, tier, splash, opts = {}) {
+  const color = opts.color || (team === 'player' ? new THREE.Color(0.6, 1.8, 2.6) : new THREE.Color(2.6, 0.8, 1.6));
+  const m = new THREE.Mesh(orbGeo, new THREE.MeshBasicMaterial({ color }));
+  m.scale.setScalar(0.8 + tier * 0.12);
+  m.position.copy(from.group.position).setY(from.height * 0.6 + 0.6);
+  scene.add(m);
+  projectiles.push({ mesh: m, from, to, dmg, color, splash, speed: 13, stun: opts.stun || 0 });
+  audio.play('shoot', { volume: 0.35, gap: 0.05 });
+}
+function updateProjectiles(dt) {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    const target = p.to;
+    tmp.copy(target.group.position).setY(target.height * 0.6 + (target.flying ? 0.6 : 0));
+    const d = tmp.distanceTo(p.mesh.position);
+    if (!target.alive && d > 0.5) { // target died: fizzle
+      burst(p.mesh.position, p.color, 4, 2, 0.3, 0.25, 1);
+      dropShot(p); projectiles.splice(i, 1); continue;
+    }
+    if (d < 0.4) {
+      dealDamage(p.from, target, p.dmg);
+      if (p.stun && target.alive && !target.isBoss) target.stun = Math.max(target.stun, p.stun);
+      if (p.splash) {
+        for (const o of units) if (o.alive && o.team === target.team && o !== target && o.group.position.distanceTo(target.group.position) < p.splash) {
+          dealDamage(p.from, o, p.dmg * 0.5, true);
+          if (p.stun && o.alive && !o.isBoss) o.stun = Math.max(o.stun, p.stun * 0.6);
+        }
+        groundRing(target.group.position, p.color, p.splash * 1.2, 0.35);
+      }
+      audio.play('orb_hit', { volume: 0.4, gap: 0.05 });
+      dropShot(p); projectiles.splice(i, 1); continue;
+    }
+    p.mesh.position.addScaledVector(tmp.sub(p.mesh.position).normalize(), Math.min(d, p.speed * dt));
+    glow.spawn(p.mesh.position, tmp2.set(0, 0, 0), p.color, 0.45, 0.25);
+  }
+}
+
+// ---- Mages: heal a hurt neighbour, otherwise cast an area spell (stuns from level 5)
+const MAGE_COLORS = [0xfff27a, 0x7af0ff, 0xff7a1a, 0x9ae6ff, 0xfff066, 0xc08aff, 0x5af0ff, 0xffe066];
+function healTarget(u) {
+  let best = null, worst = 0.85;
+  for (const o of units) {
+    if (!o.alive || o.team !== u.team) continue;
+    const r = o.hp / o.maxHp;
+    if (r < worst && o.group.position.distanceTo(u.group.position) <= u.stats.healRadius + o.radius) { worst = r; best = o; }
+  }
+  return best;
+}
+function mageAct(u, t, dx, dz, dist, reach, dt, slowK) {
+  if (u.pendingHit >= 0) { u.pendingHit -= dt; if (u.pendingHit < 0) mageRelease(u); }
+  const hurt = healTarget(u);
+  if (dist > reach && !hurt) {
+    const sp = u.stats.speed * dt * slowK;
+    u.group.position.x += (dx / dist) * sp;
+    u.group.position.z += (dz / dist) * sp;
+    if (u.current !== u.actions.attack || !u.current.isRunning()) u.play('move', 0.15);
+    return;
+  }
+  u.cooldown -= dt * slowK;
+  if (u.cooldown <= 0) {
+    u.cooldown = u.stats.interval * rand(0.92, 1.08);
+    const a = u.actions.attack;
+    if (a) {
+      a.reset(); a.setEffectiveTimeScale(Math.max(1, a.getClip().duration / (u.stats.interval * 0.85)));
+      if (u.current && u.current !== a) a.crossFadeFrom(u.current, 0.08, false);
+      a.play(); u.current = a;
+    }
+    u.castHeal = hurt;
+    u.castTarget = dist <= reach ? t : null;
+    u.pendingHit = u.stats.interval * 0.32;
+  } else if (u.current !== u.actions.attack || !u.current.isRunning()) u.play('idle', 0.15);
+}
+function mageRelease(u) {
+  const h = u.castHeal;
+  if (h && h.alive && h.hp < h.maxHp) {
+    const amount = Math.round(u.stats.heal * rand(0.9, 1.1));
+    h.setHp(h.hp + amount);
+    const p = h.group.position.clone().setY(h.height * 0.8 + (h.flying ? 0.6 : 0));
+    floatText(p, '+' + formatNum(amount), 'heal');
+    burst(p, C.green, 16, 3, 0.45, 0.6, 3);
+    groundRing(h.group.position, C.green, 1.8, 0.45);
+    glow.spawn(u.group.position.clone().setY(u.height + 0.4), tmp2.set(0, 2, 0), C.green, 0.6, 0.5, 0);
+    audio.play('bell', { volume: 0.25, rate: 1.4, gap: 0.08 });
+    return;
+  }
+  const t = u.castTarget;
+  if (t && t.alive) {
+    const col = new THREE.Color(MAGE_COLORS[Math.min(u.tier, 8) - 1]).multiplyScalar(2);
+    shoot(u, t, u.stats.dmg, u.team, u.tier, u.stats.spellSplash, { color: col, stun: u.stats.stun });
+  }
+}
+
+// ============================================================ Final boss: Voidlord Eternus (level 150)
+// Phase 1 THE KING: element changes every 8 s. Phase 2 THE SUMMONER (66% HP): 6 minions + a void shield
+// that only Mage spells break quickly. Phase 3 THE DEVOURER (33% HP): faster, shadow life-steal, and every
+// 10 s he takes your strongest monster (up to 3 times).
+const PHASE_COLORS = [[0xff2ad0, 0xb04cff], [0x2ad8ff, 0x3a8aff], [0xff2a2a, 0xff3a1a]];
+let legendDone = null;
+function eternusRecolor(u, phase) {
+  const [eye, crack] = PHASE_COLORS[phase];
+  for (const m of u.mats) {
+    if (!m.emissive) continue;
+    if (m.name === 'eternusEye') { m.baseEm = new THREE.Color(eye).multiplyScalar(2.2); m.color.setHex(eye).lerp(tmpC.setRGB(1, 1, 1), 0.25); }
+    else if (m.userData.crack) m.baseEm = new THREE.Color(crack).multiplyScalar(m.userData.crack);
+    else continue;
+    m.emissive.copy(m.baseEm);
+  }
+}
+function setBossElement(u, key) {
+  u.element = key;
+  if (!key) { if (u.elemRing) u.elemRing.visible = false; return; }
+  const col = new THREE.Color(ELEMENTS[key].color);
+  if (!u.elemRing) {
+    u.elemRing = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending }));
+    u.elemRing.position.y = 0.05; u.elemRing.renderOrder = 3;
+    u.elemRing.scale.setScalar(u.radius * 2.4 + 0.6);
+    u.group.add(u.elemRing);
+    u.fxTimer = 0;
+  }
+  u.elemRing.visible = true;
+  u.elemRing.material.color.copy(col).multiplyScalar(1.6);
+  u.elemColor = col.clone().multiplyScalar(1.8);
+  floatText(u.group.position.clone().setY(u.height + 0.8), ELEMENTS[key].name + '!', key === 'fire' ? 'burn' : key === 'poison' ? 'poison' : 'crit');
+}
+function eternusTick(u, dt) {
+  if (u.phase === undefined) { u.phase = 0; u.elemT = 0; u.elemI = Math.floor(Math.random() * ELEMENT_KEYS.length); u.devourT = 5; u.devoured = 0; setBossElement(u, ELEMENT_KEYS[u.elemI]); }
+  const r = u.hp / u.maxHp;
+  if (u.phase === 0) {
+    u.elemT += dt;
+    if (u.elemT >= 8) { u.elemT = 0; u.elemI = (u.elemI + 1) % ELEMENT_KEYS.length; setBossElement(u, ELEMENT_KEYS[u.elemI]); }
+    if (r < 0.66) eternusPhase(u, 1);
+  } else if (u.phase === 1) {
+    if (r < 0.33) eternusPhase(u, 2);
+  } else if (u.devoured < 3) {
+    u.devourT -= dt;
+    if (u.devourT <= 0) { u.devourT = 10; devour(u); }
+  }
+  if (u.shieldMesh) {
+    u.shieldMesh.rotation.y += dt * 0.7;
+    u.shieldMesh.material.opacity = 0.2 + Math.sin(elapsed * 5) * 0.06;
+  }
+}
+function eternusPhase(u, p) {
+  u.phase = p;
+  eternusRecolor(u, p);
+  showBanner(p === 1 ? 'THE SUMMONER!' : 'THE DEVOURER!', 'red');
+  shake = Math.max(shake, 0.9);
+  slowMo(0.5);
+  audio.play('slam', { volume: 1 });
+  groundRing(u.group.position, p === 1 ? C.blue : C.red, 7, 0.7);
+  burst(u.group.position.clone().setY(u.height * 0.6), p === 1 ? C.blue : C.red, 40, 6, 0.6, 0.8, 2);
+  if (p === 1) {
+    setBossElement(u, null);
+    // Void shield
+    u.shield = u.maxHp * 0.2;
+    u.shieldMax = u.shield;
+    const m = new THREE.Mesh(new THREE.IcosahedronGeometry(u.height * 0.62, 2), new THREE.MeshStandardMaterial({ color: 0x6ad8ff, emissive: 0x2a9aff, emissiveIntensity: 1, transparent: true, opacity: 0.22, depthWrite: false, flatShading: true }));
+    m.position.y = u.height * 0.55;
+    m.add(new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ color: 0x9aeaff, wireframe: true, transparent: true, opacity: 0.5, depthWrite: false })));
+    u.shieldMesh = m;
+    u.group.add(m);
+    // 6 shadow minions
+    const guard = currentLevel && currentLevel.units[0];
+    const tier = Math.max(1, (guard ? guard.tier : 6) - 2);
+    for (let i = 0; i < 6; i++) {
+      const a = -Math.PI * 0.85 + (i / 5) * Math.PI * 0.7 + Math.PI / 2;
+      const ranged = i % 3 === 2;
+      createUnit({ team: 'enemy', type: ranged ? 'ranged' : 'melee', tier, row: 0, col: 0, model: ranged ? 'P_Bat_Eye' : 'P_Slime_Shadow', element: 'shadow', minion: true }).then((mn) => {
+        if (state !== 'battle') { removeUnit(mn); return; }
+        mn.group.position.set(clamp(u.group.position.x + Math.cos(a) * 3, -6, 6), 0, u.group.position.z + Math.sin(a) * 2.6);
+        mn.group.rotation.y = 0;
+        mn.hpBar.visible = true; if (mn.badge) mn.badge.visible = false;
+        mn.stats = { ...mn.stats, hp: Math.round(mn.stats.hp * finalScale), dmg: Math.round(mn.stats.dmg * finalScale) }; mn.maxHp = mn.stats.hp;
+        mn.setHp(mn.maxHp); mn.dots = []; mn.slow = 0; mn.stun = 0; mn.cooldown = rand(0.4, 0.9); mn.target = null;
+        popIn(mn, 0.05);
+        smoke(mn.group.position, 8, C.shadow, 1);
+      });
+    }
+  } else {
+    if (u.shieldMesh) breakShield(u, true);
+    setBossElement(u, 'shadow');
+    u.stats.speed *= 1.35;
+    u.stats.interval *= 0.75;
+  }
+}
+function hitShield(attacker, u, dmg) {
+  // Mage spells crack the void shield 4x faster
+  const sd = dmg * (attacker.type === 'mage' ? 4 : 1);
+  u.shield -= sd;
+  u.flash = 0.5;
+  floatText(u.group.position.clone().setY(u.height * 0.9), formatNum(Math.round(sd)), 'shield');
+  burst(u.group.position.clone().setY(u.height * 0.6), C.blue, 4, 3, 0.3, 0.3, 1);
+  if (u.shield <= 0) breakShield(u);
+}
+function breakShield(u, silent = false) {
+  u.shield = 0;
+  if (u.shieldMesh) { u.group.remove(u.shieldMesh); u.shieldMesh.geometry.dispose(); u.shieldMesh.material.dispose(); u.shieldMesh.children[0].material.dispose(); u.shieldMesh = null; }
+  burst(u.group.position.clone().setY(u.height * 0.55), C.blue, 50, 8, 0.6, 0.8, 3);
+  if (!silent) { showBanner('SHIELD BROKEN!', 'gold'); audio.play('crit', { volume: 0.8 }); shake = Math.max(shake, 0.6); }
+}
+function devour(u) {
+  let victim = null;
+  for (const o of units) if (o.alive && o.team === 'player' && (!victim || o.maxHp > victim.maxHp)) victim = o;
+  if (!victim) return;
+  u.devoured++;
+  showBanner('DEVOURED!', 'red');
+  audio.play('slam', { volume: 0.8, rate: 0.8 });
+  const from = victim.group.position.clone();
+  tween(0.7, (k) => {
+    tmp.lerpVectors(from, u.group.position, k).setY(1 + Math.sin(k * Math.PI) * 2);
+    glow.spawn(tmp, tmp2.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)), C.red, 0.5, 0.4, 0);
+  }, () => {
+    if (!victim.alive || state !== 'battle') return;
+    victim.team = 'enemy';
+    victim.devoured = true;
+    victim.hpFill.material.color.setHex(0xff4848);
+    victim.setHp(victim.maxHp * 0.6);
+    victim.target = null; victim.retarget = 0; victim.dots = []; victim.stun = 0;
+    victim.flash = 1;
+    groundRing(victim.group.position, C.red, 2.4, 0.5);
+    floatText(victim.group.position.clone().setY(victim.height + 0.6), 'DEVOURED!', 'enemy');
+  });
+}
+// Victory over Eternus: LEGEND screen with credits, then endless mode
+async function legendFinale() {
+  save.legend = true;
+  persist();
+  platform.happyTime();
+  confetti(); setTimeout(confetti, 600);
+  audio.play('levelup', { volume: 0.9, vary: 0 });
+  const roll = document.querySelector('#legend .roll');
+  roll.style.animation = 'none'; void roll.offsetWidth; roll.style.animation = '';
+  showScreen('legend', true);
+  await new Promise((r) => { legendDone = r; });
+}
+
+function updateBattle(dt) {
+  battleTime += dt;
+  for (const u of units) {
+    if (!u.alive) continue;
+    if (u.final) eternusTick(u, dt);
+    if (u.dots.length) { updateDots(u, dt); if (!u.alive) continue; }
+    const slowK = u.slow > 0 ? 0.7 : 1;
+    if (u.slow > 0) u.slow -= dt;
+    if (u.hitTimer > 0) { u.hitTimer -= dt; if (u.hitTimer <= 0) u.play('idle', 0.1); }
+    // Stunned by a Mage spell: no moving or attacking
+    if (u.stun > 0) {
+      u.stun -= dt;
+      if (Math.random() < dt * 8) glow.spawn(tmp.copy(u.group.position).setY(u.height + (u.flying ? 1 : 0.3)), tmp2.set(rand(-0.6, 0.6), 0.2, rand(-0.6, 0.6)), C.gold, 0.25, 0.4, 0);
+      continue;
+    }
+    // Knockback slide
+    if (u.knock.lengthSq() > 0.0001) {
+      u.group.position.addScaledVector(u.knock, dt * 6);
+      u.knock.multiplyScalar(1 - dt * 6);
+    }
+    u.retarget -= dt;
+    if (!u.target || !u.target.alive || u.retarget <= 0) { u.target = nearestFoe(u); u.retarget = 0.6; }
+    const t = u.target;
+    if (!t) { u.play('idle'); continue; }
+    const dx = t.group.position.x - u.group.position.x;
+    const dz = t.group.position.z - u.group.position.z;
+    const dist = Math.hypot(dx, dz);
+    const reach = u.stats.range + t.radius + u.radius * 0.5;
+    // Face the target smoothly
+    const ang = Math.atan2(dx, dz);
+    let da = ang - u.group.rotation.y;
+    da = Math.atan2(Math.sin(da), Math.cos(da));
+    u.group.rotation.y += da * Math.min(1, dt * 10);
+    if (u.type === 'mage' && !u.isBoss) { mageAct(u, t, dx, dz, dist, reach, dt, slowK); continue; }
+    if (u.pendingHit >= 0) {
+      u.pendingHit -= dt;
+      if (u.pendingHit < 0) {
+        if (u.type === 'ranged' && !u.isBoss) shoot(u, t, u.stats.dmg, u.team, u.tier, u.tier >= 5 ? 1.8 : 0);
+        else if (t.alive && dist < reach + 0.8) {
+          dealDamage(u, t, u.stats.dmg);
+          audio.play(u.tier >= 5 || u.isBoss ? 'hit_heavy' : pick(['hit1', 'hit2']), { volume: 0.45, gap: 0.03 });
+          if (u.stats.splash) {
+            for (const o of units) if (o.alive && o.team !== u.team && o !== t && o.group.position.distanceTo(t.group.position) < u.stats.splash) dealDamage(u, o, u.stats.dmg * 0.6, true);
+            groundRing(t.group.position, C.red, u.stats.splash * 1.3, 0.4);
+            smoke(t.group.position, 10, C.dust, 1);
+            shake = Math.max(shake, 0.35);
+            audio.play('slam', { volume: 0.6 });
+          }
+        }
+      }
+    }
+    if (dist > reach) {
+      // Move toward the target
+      const sp = u.stats.speed * dt * slowK;
+      u.group.position.x += (dx / dist) * sp;
+      u.group.position.z += (dz / dist) * sp;
+      if (u.current !== u.actions.attack || !u.current.isRunning()) u.play('move', 0.15);
+      if (!u.flying && Math.random() < dt * 4) puff.spawn(tmp.copy(u.group.position).setY(0.1), tmp2.set(rand(-0.5, 0.5), 0.6, rand(-0.5, 0.5)), C.dust, 0.4, 0.4, 0);
+    } else {
+      u.cooldown -= dt * slowK;
+      if (u.cooldown <= 0) {
+        u.cooldown = u.stats.interval * rand(0.92, 1.08);
+        const a = u.actions.attack;
+        if (a) {
+          a.reset(); a.setEffectiveTimeScale(Math.max(1, a.getClip().duration / (u.stats.interval * 0.85)));
+          if (u.current && u.current !== a) a.crossFadeFrom(u.current, 0.08, false);
+          a.play(); u.current = a;
+        }
+        u.pendingHit = u.stats.interval * 0.32;
+      } else if (u.current !== u.actions.attack || !u.current.isRunning()) u.play('idle', 0.15);
+    }
+  }
+  // Keep units from overlapping
+  const alive = units.filter((u) => u.alive);
+  for (let i = 0; i < alive.length; i++) {
+    for (let j = i + 1; j < alive.length; j++) {
+      const a = alive[i], b = alive[j];
+      if (a.flying !== b.flying) continue;
+      const dx = b.group.position.x - a.group.position.x, dz = b.group.position.z - a.group.position.z;
+      const d = Math.hypot(dx, dz) || 0.001;
+      const min = (a.radius + b.radius) * 0.9;
+      if (d < min) {
+        const push = (min - d) * 0.5;
+        const wa = a.isBoss ? 0.1 : 1, wb = b.isBoss ? 0.1 : 1;
+        a.group.position.x -= (dx / d) * push * wa; a.group.position.z -= (dz / d) * push * wa;
+        b.group.position.x += (dx / d) * push * wb; b.group.position.z += (dz / d) * push * wb;
+      }
+    }
+  }
+  for (const u of alive) {
+    u.group.position.x = clamp(u.group.position.x, -6.5, 6.5);
+    u.group.position.z = clamp(u.group.position.z, -9.5, 9.5);
+  }
+  const pAlive = units.some((u) => u.alive && u.team === 'player');
+  const eAlive = units.some((u) => u.alive && u.team === 'enemy');
+  if (!eAlive) endBattle(true);
+  else if (!pAlive) endBattle(false);
+  else if (battleTime > (currentLevel && currentLevel.final ? 150 : 90)) endBattle(false);
+}
+
+async function endBattle(won) {
+  state = 'result';
+  for (const p of projectiles) dropShot(p);
+  projectiles.length = 0;
+  if (won) {
+    slowMo(0.9);
+    showBanner('VICTORY!', 'gold');
+    audio.play('win', { volume: 0.9, vary: 0 });
+    for (const u of playerUnits()) if (u.alive) { u.play('win', 0.2); u.hpBar.visible = false; }
+    confetti();
+    await wait(currentLevel && currentLevel.final ? 3.2 : 2.0);
+    if (currentLevel && currentLevel.final) await legendFinale();
+    const coins = winCoins(save.level);
+    $('winCoins').textContent = formatNum(coins);
+    $('tripleBtn').classList.toggle('hidden', !platform.hasRewarded);
+    pendingReward = coins;
+    showScreen('win', true);
+    platform.happyTime();
+  } else {
+    showBanner('DEFEAT', 'red');
+    audio.play('lose', { volume: 0.9, vary: 0 });
+    for (const u of enemyUnits()) if (u.alive) { u.play('win', 0.2); u.hpBar.visible = false; }
+    await wait(1.8);
+    const coins = Math.max(5, Math.round(winCoins(save.level) * 0.3));
+    $('loseCoins').textContent = formatNum(coins);
+    $('loseTip').textContent = pick([
+      'The enemy gets a little weaker every time you try again!',
+      'Put Brawlers in front to protect your Flyers!',
+      'Glowing enemies have ELEMENT powers. Kill them first!',
+      'Flyers at level 5+ hit several enemies at once!',
+      'A ? badge hides how strong that enemy is. Be ready!',
+      'Sell weak monsters to make room for bigger merges.',
+    ]);
+    if (currentLevel && currentLevel.final) $('loseTip').textContent = pick([
+      'Eternus barely weakens. Break his SHIELD with Mage spells!',
+      'In his last phase he DEVOURS your strongest monster. Have more than one big hitter!',
+      'Kill the Void Knights fast: they guard the King.',
+    ]);
+    pendingReward = coins;
+    // One comeback offer per defeat: retry with a bonus monster
+    $('bonusBtn').classList.toggle('hidden', !platform.hasRewarded);
+    showScreen('lose', true);
+  }
+}
+let pendingReward = 0;
+
+function confetti() {
+  const colors = [C.gold, C.blue, C.red, C.green, C.purple];
+  for (let i = 0; i < 90; i++) {
+    glow.spawn(tmp.set(rand(-6, 6), rand(6, 10), rand(-4, 8)), tmp2.set(rand(-2, 2), rand(-1, 3), rand(-2, 2)), pick(colors), rand(0.25, 0.45), rand(1.2, 2.2), 3);
+  }
+}
+
+// Reset the player's army after a battle (monsters return to their cells)
+async function restoreArmy(board) {
+  for (const u of playerUnits()) removeUnit(u);
+  const list = await Promise.all(board.map((b) => createUnit({ team: 'player', ...b })));
+  list.forEach((u, i) => { tween(0.01, () => {}, () => popIn(u, 0.1)); });
+  updatePower();
+}
+
+async function afterResult(won, coins) {
+  showScreen('win', false); showScreen('lose', false);
+  save.coins += coins;
+  bumpCoins();
+  const prevLevel = save.level;
+  if (won) save.level++;
+  else if (save.foe && save.foe.level === save.level) save.foe.losses++;
+  save.levelsSinceAd++;
+  persist();
+  if (won) platform.sendScore(prevLevel);
+  await restoreArmy(battleBoard);
+  // Treasure chest every 5 levels
+  if (won && prevLevel % 5 === 0) {
+    await chestSequence(prevLevel);
+  }
+  // Midgame ad between levels. CrazyGames and Playgama pace these themselves, other platforms every 3 fights.
+  // Never straight after a rewarded ad (platform rule: no rewarded + midgame in the same break).
+  // On Playgama the Bridge alone decides the timing (its config holds the delays).
+  const recentReward = platform.noMidAfterReward && performance.now() - lastRewardedAt < 90000;
+  if (!recentReward && (platform.adCapped || save.levelsSinceAd >= 3)) {
+    save.levelsSinceAd = 0;
+    await platform.midgameAd();
+  }
+  await setupLevel();
+  // Bonus monster from the Defeat-screen ad
+  if (pendingBonus) { pendingBonus = false; await giveFreeMonster(); }
+}
+let lastRewardedAt = -1e9;
+let pendingBonus = false;
+// Every rewarded ad goes through here so we know when the last one played
+async function watchRewarded(id) {
+  const ok = await platform.rewardedAd(id);
+  if (ok) lastRewardedAt = performance.now();
+  else showBanner('NO AD RIGHT NOW', 'red');
+  return ok;
+}
+function unlockedLines() { return save.level >= MAGE_UNLOCK ? LINE_KEYS : ['melee', 'ranged']; }
+function freeTier() {
+  const best = Math.max(...LINE_KEYS.map((l) => save.discovered[l] || 0), 1);
+  return Math.max(1, Math.min(tierCap(save.level) - 1, best - 2));
+}
+async function giveFreeMonster() {
+  const tier = freeTier();
+  const type = pick(unlockedLines());
+  if (emptyPlayerCells().length) await buy(type, true, tier);
+  else { save.coins += sellValue(type, tier, save.buys[type]) * 2; bumpCoins(); showBanner('BOARD FULL: BONUS COINS!', 'gold'); }
+  updateShopUI(); updatePower(); persist();
+}
+
+// ============================================================ Treasure chest
+let chest = null;
+async function chestSequence(level) {
+  state = 'chest';
+  showBottom(false);
+  for (const u of enemyUnits()) removeUnit(u);
+  const closed = await envObject('p_Chest_Wood', 1.6);
+  closed.position.set(0, 9, 0);
+  closed.rotation.y = 0;
+  scene.add(closed);
+  chest = { obj: closed, level, opened: false, taps: 0 };
+  tween(0.5, (k) => { closed.position.y = 9 * (1 - k * k); }, () => {
+    smoke(closed.position, 14, C.dust, 1);
+    groundRing(closed.position, C.gold, 3);
+    shake = 0.3;
+    audio.play('place', { volume: 0.8 });
+    $('chestHint').classList.remove('hidden');
+  });
+  camZoom = { pos: new THREE.Vector3(0, 7, 8), look: new THREE.Vector3(0, 0.8, 0), k: 0 };
+  tween(0.6, (k) => { if (camZoom) camZoom.k = easeOutCubic(k); });
+  await new Promise((r) => { chest.resolve = r; });
+}
+
+async function tapChest() {
+  if (!chest || chest.opened) return;
+  chest.taps++;
+  audio.play('chest_latch', { volume: 0.7 });
+  const o = chest.obj;
+  tween(0.2, (k) => { o.rotation.z = Math.sin(k * Math.PI * 3) * 0.15; o.scale.setScalar(1 + Math.sin(k * Math.PI) * 0.12); });
+  burst(o.position.clone().setY(1), C.gold, 8, 3, 0.4, 0.4, 2);
+  if (chest.taps < 3) return;
+  chest.opened = true;
+  $('chestHint').classList.add('hidden');
+  await wait(0.25);
+  scene.remove(o);
+  const open = await envObject('pf_Chest', 1.7);
+  open.position.copy(o.position);
+  scene.add(open);
+  popIn({ group: open }, 0.6);
+  audio.play('chest_open', { volume: 0.8 });
+  audio.play('coins2', { volume: 0.8 });
+  burst(open.position.clone().setY(1.2), C.gold, 60, 7, 0.6, 1, 6);
+  beam(open.position, 0xffd040, 1.2);
+  shake = 0.4;
+  const coins = winCoins(chest.level) * 3;
+  flyCoins(open.position.clone().setY(1.2), 14);
+  const freeTierNow = freeTier();
+  const cells = emptyPlayerCells();
+  const freeType = pick(unlockedLines());
+  $('chestCoins').textContent = formatNum(coins);
+  $('chestExtra').textContent = cells.length ? `+ FREE ${tierInfo(freeType, freeTierNow).name.toUpperCase()}!` : '';
+  await wait(1.0);
+  $('chestDoubleBtn').classList.toggle('hidden', !platform.hasRewarded);
+  showScreen('chestWin', true);
+  chest.reward = { coins, freeTier: freeTierNow, freeType, cells: cells.length };
+  chest.open = open;
+}
+
+async function collectChest() {
+  showScreen('chestWin', false);
+  const r = chest.reward;
+  save.coins += r.coins;
+  bumpCoins();
+  scene.remove(chest.open);
+  smoke(chest.open.position, 12);
+  camZoom = null;
+  state = 'prep';
+  if (r.cells) await buy(r.freeType, true, r.freeTier);
+  persist();
+  const done = chest.resolve;
+  chest = null;
+  done();
+}
+
+// ============================================================ UI helpers
+function showScreen(id, on) { $(id).classList.toggle('show', on); }
+function showBanner(text, cls = '') {
+  const el = $('banner');
+  el.textContent = text;
+  el.className = 'banner';
+  void el.offsetWidth;
+  el.className = 'banner show ' + cls;
+}
+function bumpCoins() {
+  $('coinNum').textContent = formatNum(save.coins);
+  const el = document.querySelector('.coins');
+  el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+  audio.play('coins', { volume: 0.25, gap: 0.08 });
+  updateShopUI();
+}
+
+// 3D portraits for the monster book and "new monster" card
+let thumbRenderer = null, thumbScene, thumbCam;
+const thumbCache = new Map();
+async function thumbnail(model, aura) {
+  const key = model + (aura || '');
+  if (thumbCache.has(key)) return thumbCache.get(key);
+  if (!thumbRenderer) {
+    thumbRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+    thumbRenderer.setSize(256, 256);
+    thumbRenderer.toneMapping = THREE.NeutralToneMapping;
+    thumbScene = new THREE.Scene();
+    thumbScene.add(new THREE.HemisphereLight(0xffffff, 0x8a7a5a, 2.2));
+    const d = new THREE.DirectionalLight(0xffffff, 2.2); d.position.set(2, 4, 5); thumbScene.add(d);
+    thumbCam = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
+  }
+  const t = await loadModel(monsterPath(model));
+  const obj = cloneSkinned(t.scene);
+  const mixer = new THREE.AnimationMixer(obj);
+  const idle = findClip(t.animations, ANIMS.idle);
+  if (idle) { mixer.clipAction(idle).play(); mixer.update(0.4); }
+  if (aura) obj.traverse((o) => { if (o.isMesh) { o.material = o.material.clone(); o.material.emissive = new THREE.Color(aura); o.material.emissiveIntensity = 0.35; } });
+  const s = 2 / t.size.y;
+  obj.scale.setScalar(s);
+  obj.position.set(-t.center.x * s, -t.center.y * s, -t.center.z * s);
+  obj.rotation.y = -0.35;
+  thumbScene.add(obj);
+  thumbCam.position.set(0, 0.5, 5.2);
+  thumbCam.lookAt(0, 0, 0);
+  thumbRenderer.render(thumbScene, thumbCam);
+  const url = thumbRenderer.domElement.toDataURL('image/png');
+  thumbScene.remove(obj);
+  thumbCache.set(key, url);
+  return url;
+}
+
+// Display names for the bestiary
+const PROC_NAMES = {
+  P_Slime_Green: 'Green Slime', P_Slime_Shadow: 'Shadow Slime', P_Slime_Lava: 'Lava Slime', P_Golem_Sand: 'Sand Golem', P_Golem_Ice: 'Ice Golem',
+  P_Golem_Lava: 'Lava Golem', P_Golem_Crystal: 'Crystal Golem', P_Golem_Moss: 'Moss Golem', P_Snowman: 'Snowman Brute', P_Cactus: 'Cactus Brute',
+  P_Bat_Eye: 'Eyeball Bat', P_Bat_Frost: 'Frost Bat', P_Bat_Sand: 'Sand Bat', P_Wisp_Fire: 'Fire Wisp', P_Wisp_Crystal: 'Crystal Wisp', P_Pumpkin: 'Pumpkin Ghost',
+  P_VoidKnight: 'Void Knight', P_Eternus: 'Voidlord Eternus',
+};
+function enemyName(model) {
+  if (PROC_NAMES[model]) return PROC_NAMES[model];
+  const parts = model.split('_');
+  const kind = parts.shift();
+  let name = parts.filter((p) => p !== 'Evolved').join(' ');
+  if (parts.includes('Evolved')) name = 'Elder ' + name;
+  return (kind === 'Big' ? 'Giant ' : kind === 'Flying' ? 'Flying ' : '') + name;
+}
+// Bestiary layout: each arena's creatures and boss, then the wild monsters
+function bestiaryGroups() {
+  const seen = new Set();
+  const groups = ARENAS.map((a, i) => {
+    const list = [...a.melee, ...a.ranged].filter((m) => !seen.has(m) && seen.add(m)).map((m) => ({ key: m, model: m, name: enemyName(m) }));
+    list.push({ key: 'boss:' + a.boss.name, model: a.boss.model, name: a.boss.name.split(' ').map((w) => w[0] + w.slice(1).toLowerCase()).join(' '), boss: true });
+    return { title: THEMES[i].name, list };
+  });
+  if (FINAL) groups.push({ title: THEMES[VOID_THEME].name, list: [
+    { key: GUARD_MODEL, model: GUARD_MODEL, name: 'Void Knight' },
+    { key: 'boss:' + ETERNUS.name, model: ETERNUS.model, name: 'Voidlord Eternus', boss: true },
+  ] });
+  const wild = [];
+  for (const t of Object.keys(ENEMIES)) for (const type of ['melee', 'ranged']) for (const m of ENEMIES[t][type]) if (!seen.has(m)) { seen.add(m); wild.push({ key: m, model: m, name: enemyName(m) }); }
+  groups.push({ title: 'WILD MONSTERS', list: wild });
+  return groups;
+}
+function bookCard(model, name, sub, known, aura, extraCls = '') {
+  const card = document.createElement('div');
+  card.className = 'book-card' + (known ? '' : ' locked') + extraCls;
+  card.innerHTML = `<img alt=""><div>${known ? name : '???'}</div><div class="t">${sub}</div>`;
+  thumbnail(model, aura).then((url) => { card.querySelector('img').src = url; });
+  return card;
+}
+let bookTab = 'mine';
+async function openBook() {
+  showScreen('book', true);
+  // Your monsters: 3 lines x 15 levels
+  let mine = 0;
+  const cap = tierCap(save.level);
+  for (const line of LINE_KEYS) {
+    const grid = $({ melee: 'bookMelee', ranged: 'bookRanged', mage: 'bookMage' }[line]);
+    grid.innerHTML = '';
+    for (let t = 1; t <= MAX_TIER; t++) {
+      const known = (save.discovered[line] || 0) >= t;
+      if (known) mine++;
+      const info = tierInfo(line, t);
+      let sub = `Lv ${t}`;
+      if (!known && line === 'mage' && save.level < MAGE_UNLOCK) sub = `Unlocks at level ${MAGE_UNLOCK}`;
+      else if (!known && t > cap) sub = `Lv ${t} · level ${TIER_UNLOCK[t]}`;
+      if (known) grid.appendChild(bookCard(info.model, info.name, sub, true, AURA_COLORS[t]));
+      else {
+        const card = document.createElement('div');
+        card.className = 'book-card locked' + (t > cap ? ' cap' : '');
+        card.innerHTML = `<div class="q">${t > cap || sub.startsWith('Unlocks') ? icon('lock') : '?'}</div><div class="t">${sub}</div>`;
+        grid.appendChild(card);
+      }
+    }
+  }
+  // Bestiary: every enemy type and boss you have defeated
+  const best = $('bookBest');
+  best.innerHTML = '';
+  let beaten = 0, total = 0;
+  for (const g of bestiaryGroups()) {
+    const h = document.createElement('div'); h.className = 'best-sec'; h.textContent = g.title; best.appendChild(h);
+    const grid = document.createElement('div'); grid.className = 'book-grid'; best.appendChild(grid);
+    for (const e of g.list) {
+      total++;
+      const known = !!(save.defeated && save.defeated[e.key]);
+      if (known) beaten++;
+      grid.appendChild(bookCard(e.model, e.name, known ? (e.boss ? 'Boss defeated' : 'Defeated') : (e.boss ? 'Boss' : 'Not defeated'), known));
+    }
+  }
+  $('countMine').textContent = `${mine}/${MAX_TIER * LINE_KEYS.length}`;
+  $('countBest').textContent = `${beaten}/${total}`;
+  $('bookProgress').textContent = `${mine + beaten} / ${MAX_TIER * LINE_KEYS.length + total} collected`;
+  setBookTab(bookTab);
+  audio.play('book', { volume: 0.7 });
+}
+function setBookTab(tab) {
+  bookTab = tab;
+  $('tabMine').classList.toggle('on', tab === 'mine');
+  $('tabBest').classList.toggle('on', tab === 'best');
+  $('bookMine').classList.toggle('hidden', tab !== 'mine');
+  $('bookBest').classList.toggle('hidden', tab !== 'best');
+}
+
+// Big card for unlocks (Mages, new monster levels)
+let unlockDone = null;
+async function showUnlockCard({ ribbon, model, aura, name, text, btn }) {
+  const rib = document.querySelector('#newMon .ribbon');
+  const old = rib.textContent;
+  const oldBtn = $('newMonBtn').textContent;
+  rib.textContent = ribbon;
+  if (btn) $('newMonBtn').textContent = btn;
+  $('newMonImg').src = await thumbnail(model, aura);
+  $('newMonName').textContent = name;
+  $('newMonTier').textContent = text;
+  audio.play('levelup', { volume: 0.8, vary: 0 });
+  showScreen('newMon', true);
+  await new Promise((r) => { unlockDone = r; });
+  rib.textContent = old;
+  $('newMonBtn').textContent = oldBtn;
+}
+async function maybeUnlocks() {
+  if (FINAL && save.level >= HELL_FROM && !save.hellSeen) {
+    save.hellSeen = true; persist();
+    await showUnlockCard({ ribbon: 'WARNING!', model: GUARD_MODEL, name: 'HELL MODE!', text: 'From now on EVERY enemy has an element power, their power is hidden and retries barely help. Survive to level 150 to face the FINAL BOSS!', btn: "I'M READY!" });
+  }
+  if (save.level >= MAGE_UNLOCK && !save.mageUnlocked) {
+    save.mageUnlocked = true; persist();
+    await showUnlockCard({ ribbon: 'NEW CLASS!', model: 'P_Mage_Sprite', name: 'MAGES UNLOCKED!', text: 'Mages heal nearby friends and cast area spells. Keep them in the MIDDLE row, behind your Brawlers!' });
+  }
+  const cap = tierCap(save.level);
+  if (!save.tierSeen) save.tierSeen = {};
+  if (cap > 10 && !save.tierSeen[cap]) {
+    for (let t = 11; t <= cap; t++) save.tierSeen[t] = 1;
+    persist();
+    await showUnlockCard({ ribbon: 'NEW POWER!', model: tierInfo('melee', 8).model, aura: AURA_COLORS[cap], name: `${TIER_TITLES[cap].toUpperCase()} UNLOCKED!`, text: `Merge two Level ${cap - 1} monsters to create a ${TIER_TITLES[cap]} monster!` });
+  }
+}
+
+// ============================================================ Save / load
+let battleBoard = [];
+function persist() {
+  if (state !== 'battle' && state !== 'result') save.board = savedBoard();
+  platform.saveData(save);
+}
+function applySettings() {
+  audio.setSfx(save.sfx);
+  audio.setMusic(save.music);
+  $('sfxBtn').textContent = 'SOUND: ' + (save.sfx ? 'ON' : 'OFF');
+  $('musicBtn').textContent = 'MUSIC: ' + (save.music ? 'ON' : 'OFF');
+}
+function today() {
+  const d = new Date();
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
+// ============================================================ Buttons
+const audio = new AudioManager();
+const click = (id, fn) => $(id).addEventListener('click', (e) => { e.stopPropagation(); audio.unlock(); audio.play('click', { volume: 0.6 }); fn(); });
+click('buyMelee', () => buy('melee'));
+click('buyRanged', () => buy('ranged'));
+click('buyMage', () => buy('mage'));
+click('fightBtn', () => { battleBoard = savedBoard(); save.board = battleBoard; persist(); startBattle(); });
+click('freeBtn', async () => {
+  const ok = await watchRewarded('free_monster');
+  if (!ok) return;
+  save.freeUsedLevel = save.level;
+  await giveFreeMonster();
+});
+click('tripleBtn', async () => {
+  const ok = await watchRewarded('triple_coins');
+  if (!ok) return;
+  afterResult(true, pendingReward * 3);
+});
+click('bonusBtn', async () => {
+  const ok = await watchRewarded('retry_bonus');
+  if (!ok) return;
+  pendingBonus = true;
+  afterResult(false, pendingReward);
+});
+click('dailyDoubleBtn', async () => {
+  const ok = await watchRewarded('double_daily');
+  if (!ok) return;
+  dailyAmount *= 2;
+  $('dailyBtn').click();
+});
+click('chestDoubleBtn', async () => {
+  const ok = await watchRewarded('double_treasure');
+  if (!ok) return;
+  if (chest && chest.reward) chest.reward.coins *= 2;
+  showBanner('DOUBLE TREASURE!', 'gold');
+  collectChest();
+});
+click('claimBtn', () => afterResult(true, pendingReward));
+click('legendBtn', () => { showScreen('legend', false); if (legendDone) { const d = legendDone; legendDone = null; d(); } });
+click('retryBtn', () => afterResult(false, pendingReward));
+click('tabMine', () => setBookTab('mine'));
+click('tabBest', () => setBookTab('best'));
+click('newMonBtn', () => {
+  showScreen('newMon', false);
+  if (unlockDone) { const d = unlockDone; unlockDone = null; d(); }
+  timeScale = 1;
+  if (camZoom) tween(0.4, (k) => { if (camZoom) camZoom.k = 1 - k; }, () => { camZoom = null; });
+});
+click('chestBtn', () => collectChest());
+click('dailyBtn', () => {
+  showScreen('daily', false);
+  save.coins += dailyAmount;
+  save.lastDaily = today();
+  persist();
+  flyCoins(new THREE.Vector3(0, 1, 2), 10);
+});
+click('bookBtn', () => openBook());
+click('bookClose', () => showScreen('book', false));
+click('settingsBtn', () => { showScreen('settings', true); setPaused(true); });
+click('settingsClose', () => { showScreen('settings', false); setPaused(false); });
+click('sfxBtn', () => { save.sfx = !save.sfx; applySettings(); persist(); });
+click('musicBtn', () => { save.music = !save.music; applySettings(); persist(); });
+// Optional sign-in (Playgama): saves progress to the player's account; the game never asks by itself
+function updateSignIn() {
+  const can = !!(platform.canSignIn && platform.canSignIn());
+  $('signInBtn').classList.toggle('hidden', !can);
+  $('signInBtn2').classList.toggle('hidden', !can);
+}
+async function doSignIn() {
+  const ok = await platform.signIn();
+  updateSignIn();
+  if (!ok) return;
+  showBanner('SIGNED IN!', 'gold');
+  // Progress from another device wins if it is further along
+  const cloud = await platform.loadData();
+  if (cloud && cloud.level > save.level) { location.reload(); return; }
+  persist();
+}
+click('signInBtn', () => doSignIn());
+click('signInBtn2', () => { showScreen('settings', false); setPaused(false); doSignIn(); });
+click('guideBtn', async () => { showScreen('settings', false); await openGuide(); setPaused(false); });
+click('guideNext', () => { if (guidePage < GUIDE.length - 1) { guidePage++; renderGuide(); } else closeGuide(); });
+click('guideBack', () => { if (guidePage > 0) { guidePage--; renderGuide(); } });
+click('guideSkip', () => closeGuide());
+click('elemOk', () => { showScreen('elemCard', false); if (elemCardDone) { const d = elemCardDone; elemCardDone = null; d(); } });
+click('creditsBtn', () => { showScreen('settings', false); showScreen('credits', true); });
+click('creditsClose', () => { showScreen('credits', false); showScreen('settings', true); });
+click('restartLevelBtn', () => { showScreen('settings', false); setPaused(false); restartLevel(); });
+click('newGameBtn', () => { showScreen('settings', false); showScreen('confirmReset', true); });
+click('resetNo', () => { showScreen('confirmReset', false); setPaused(false); });
+click('resetYes', () => { showScreen('confirmReset', false); setPaused(false); newGame(); });
+
+// Start the current level again: your army returns to its squares, the enemy army is rebuilt
+async function restartLevel() {
+  if (state === 'loading-level' || state === 'chest') return;
+  const wasBattle = state === 'battle' || state === 'result';
+  state = 'loading-level';
+  for (const p of projectiles) dropShot(p);
+  projectiles.length = 0;
+  showScreen('win', false); showScreen('lose', false);
+  timeScale = 1; slowMoTimer = 0; camZoom = null;
+  await restoreArmy(wasBattle ? battleBoard : savedBoard());
+  persist();
+  await setupLevel();
+}
+
+// Wipe all progress and begin again from level 1
+async function newGame() {
+  if (state === 'loading-level' || state === 'chest') return;
+  state = 'loading-level';
+  for (const p of projectiles) dropShot(p);
+  projectiles.length = 0;
+  showScreen('win', false); showScreen('lose', false);
+  timeScale = 1; slowMoTimer = 0; camZoom = null;
+  Object.assign(save, {
+    level: 1, coins: START_COINS, buys: { melee: 0, ranged: 0, mage: 0 },
+    board: [{ type: 'melee', tier: 1, row: 0, col: 2 }, { type: 'melee', tier: 1, row: 0, col: 1 }],
+    discovered: { melee: 1, ranged: 0, mage: 0 }, levelsSinceAd: 0, freeUsedLevel: 0, foe: null, mageUnlocked: false, tierSeen: {},
+  });
+  hintShown = false;
+  battleBoard = save.board.slice();
+  await restoreArmy(save.board);
+  persist();
+  bumpCoins();
+  await setupLevel();
+}
+
+function setPaused(p) {
+  paused = p;
+  syncGameplay();
+}
+hooks.onAdStart = () => { adActive = true; audio.setBlocked(true); };
+hooks.onAdEnd = () => { adActive = false; audio.setBlocked(!platform.isAudioEnabled()); };
+hooks.onPause = () => { paused = true; audio.setPaused(true); syncGameplay(); };
+hooks.onResume = () => { paused = false; audio.setPaused(false); syncGameplay(); };
+hooks.onAudioChange = (on) => audio.setBlocked(!on || adActive);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) audio.setPaused(true);
+  else if (!adActive && !paused) audio.setPaused(false);
+  syncGameplay();
+});
+window.addEventListener('blur', () => audio.setPaused(true));
+window.addEventListener('focus', () => { if (!adActive && !document.hidden && !paused) audio.setPaused(false); });
+window.addEventListener('resize', resize);
+window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ============================================================ Gameplay markup for platforms
+// "Playing" means: a level is active (preparing or fighting), no menu or ad is open, the tab is visible.
+let gameplayOn = false;
+function syncGameplay() {
+  const menuOpen = !!document.querySelector('.screen.show');
+  const on = (state === 'prep' || state === 'battle') && !paused && !adActive && !document.hidden && !menuOpen;
+  if (on === gameplayOn) return;
+  gameplayOn = on;
+  if (on) platform.gameplayStart(); else platform.gameplayStop();
+}
+
+// ============================================================ Main loop
+let last = performance.now();
+let lowQuality = false;
+let capFocus = null;
+let capZoom = CAPTURE ? 0.66 : 1;
+let slowFrames = 0;
+let elapsed = 0;
+function frame() {
+  if (!CAPTURE) requestAnimationFrame(frame);
+  if (window.__noRender) return;
+  const now = performance.now();
+  const raw = forcedDt !== null ? forcedDt : Math.min((now - last) / 1000, 0.05);
+  last = now;
+  syncGameplay();
+  if (paused || adActive) { renderer.render(scene, camera); return; }
+  if (slowMoTimer > 0) { slowMoTimer -= raw; if (slowMoTimer <= 0) timeScale = 1; }
+  const dt = raw * timeScale;
+  elapsed += raw;
+
+  if (state === 'battle') updateBattle(dt);
+  // Auto quality: drop shadows and resolution if the device struggles
+  if (!lowQuality && (state === 'battle' || state === 'prep')) {
+    slowFrames = raw > 1 / 30 ? slowFrames + 1 : Math.max(0, slowFrames - 1);
+    if (slowFrames > 120) {
+      lowQuality = true;
+      renderer.shadowMap.enabled = false;
+      scene.traverse((o) => { if (o.material) o.material.needsUpdate = true; });
+      pixelRatio = Math.min(pixelRatio, 1.25);
+      renderer.setPixelRatio(pixelRatio);
+      resize();
+    }
+  }
+  updateProjectiles(dt);
+  for (const u of units) {
+    u.mixer.update(dt);
+    // Hit flash and merge highlight
+    if (u.flash > 0 || u.mergeGlow || u.wasGlow) {
+      u.flash = Math.max(0, u.flash - dt * 6);
+      const g = u.mergeGlow ? 0.35 + Math.sin(elapsed * 10) * 0.25 : 0;
+      const v = u.flash * 0.55 + g;
+      for (const m of u.mats) {
+        if (!m.emissive) continue;
+        m.emissive.copy(m.baseEm).add(tmpC.setRGB(v, v, v * (u.mergeGlow ? 0.4 : 1)));
+      }
+      u.wasGlow = u.mergeGlow || u.flash > 0;
+    }
+    // Flyers hover
+    if (u.flying) u.inner.position.y = 0.7 + Math.sin(elapsed * 2.5 + u.bob) * 0.15;
+    if (u.acc) {
+      if (u.acc.userData.spin) u.acc.userData.spin.rotation.y += raw * 1.5;
+      if (u.acc.userData.flap) u.acc.rotation.x = Math.sin(elapsed * 6 + u.bob) * 0.08;
+    }
+    if (u.auraRing) u.auraRing.material.opacity = u.alive ? 0.55 + Math.sin(elapsed * 3 + u.bob) * 0.25 : 0;
+    // Element aura: pulsing ring and particles
+    if (u.elemRing && u.alive) {
+      u.elemRing.material.opacity = 0.55 + Math.sin(elapsed * 4 + u.bob) * 0.3;
+      u.fxTimer -= raw;
+      if (u.fxTimer <= 0 && !lowQuality) {
+        u.fxTimer = 0.12;
+        elementParticle(u);
+      }
+    } else if (u.elemRing && !u.alive) u.elemRing.visible = false;
+    if (u.slow > 0 && Math.random() < raw * 6) puff.spawn(tmp.copy(u.group.position).setY(u.height * 0.7 + rand(-0.3, 0.3)), tmp2.set(rand(-0.5, 0.5), 0.4, rand(-0.5, 0.5)), C.ice, 0.3, 0.5, 0);
+    // Bars face the camera
+    if (u.hpBar.visible) u.hpBar.quaternion.copy(u.group.quaternion).invert().multiply(camera.quaternion);
+  }
+  if (themeNow >= 0 && !lowQuality) ambientParticles(THEMES[themeNow], glow, puff, raw, emberSources);
+  skyMat.uniforms.uTime.value = elapsed;
+  for (const a of animatedUniforms) a.uTime.value = elapsed;
+  for (const f of floatProps) { f.obj.position.y = f.base + Math.sin(elapsed * 0.6 + f.bob) * 0.8; f.obj.rotation.y += raw * 0.2; }
+  glow.update(dt);
+  puff.update(dt);
+  updateRings(dt);
+  updateTweens(raw);
+  updateFloaters(raw);
+  for (const c of clouds) {
+    c.obj.position.y = c.base + Math.sin(elapsed * 0.4 + c.bob) * 0.6;
+    if (c.speed) { c.obj.position.x += c.speed * raw; if (c.obj.position.x > 50) c.obj.position.x = -50; }
+  }
+  // Camera: base framing, optional zoom, shake
+  shake = Math.max(0, shake - raw * 1.8);
+  const s = shake * shake * 0.5;
+  if (camZoom) {
+    camera.position.lerpVectors(camBase, camZoom.pos, camZoom.k);
+    tmp.lerpVectors(camLook, camZoom.look, camZoom.k);
+  } else { camera.position.copy(camBase); tmp.copy(camLook); }
+  camera.position.x += rand(-s, s); camera.position.y += rand(-s, s);
+  if (CAPTURE && !camZoom) {
+    // Trailer camera: closer, slowly orbiting, and following the fight
+    const alive = units.filter((u) => u.alive);
+    const focus = new THREE.Vector3(0, 0.8, 2.5);
+    if (state === 'battle' || state === 'result') {
+      const c = new THREE.Vector3();
+      for (const u of alive) c.add(u.group.position);
+      if (alive.length) c.multiplyScalar(1 / alive.length);
+      focus.set(c.x * 0.6, 1, c.z);
+    }
+    capFocus = capFocus ? capFocus.lerp(focus, Math.min(1, raw * 2)) : focus.clone();
+    const a = Math.sin(elapsed * 0.3) * 0.22;
+    const off = new THREE.Vector3().subVectors(camBase, camLook).multiplyScalar(capZoom).applyAxisAngle(new THREE.Vector3(0, 1, 0), a);
+    camera.position.copy(capFocus).add(off);
+    tmp.copy(capFocus);
+  }
+  camera.lookAt(tmp);
+  renderer.render(scene, camera);
+}
+
+// ============================================================ Boot
+let dailyAmount = 0;
+async function boot() {
+  applyIcons();
+  resize();
+  platform.firstFrameReady();
+  const sdk = platform.init();
+  if (platform.waitForSdk) await sdk;
+  let done = 0;
+  const total = 12;
+  const tick = () => { done++; const pct = Math.min(100, (100 * done) / total); $('loadBar').style.width = pct + '%'; platform.loadingProgress && platform.loadingProgress(pct); };
+
+  const sfx = ['hit1', 'hit2', 'hit_heavy', 'die', 'orb_hit', 'bell', 'slam', 'crit', 'place', 'coins', 'coins2', 'fight', 'shoot', 'chest_latch', 'chest_open', 'book', 'pickup', 'click', 'merge', 'levelup', 'denied', 'lose', 'win', 'drop'];
+  const sfxJob = Promise.all(sfx.map((n) => audio.load(n, `assets/audio/${n}.mp3`))).then(tick);
+  const saveJob = sdk.then(async () => {
+    const data = await platform.loadData();
+    if (data && data.level) {
+      Object.assign(save, data);
+      save.buys = Object.assign({ melee: 0, ranged: 0, mage: 0 }, data.buys || {});
+      save.discovered = Object.assign({ melee: 1, ranged: 0, mage: 0 }, data.discovered || {});
+      save.defeated = data.defeated || {};
+      save.tierSeen = data.tierSeen || {};
+    }
+    tick();
+  });
+  const arenaJob = saveJob.then(() => buildArena()).then(() => applyTheme(tIdx(save.level))).then(tick);
+  await saveJob;
+  // Monsters needed for the first screen
+  const firstModels = new Set();
+  for (const b of save.board) firstModels.add(tierInfo(b.type, b.tier).model);
+  const L = currentArmy();
+  for (const e of L.units) firstModels.add(e.model);
+  if (L.boss) firstModels.add(L.boss.model);
+  const modelJobs = [...firstModels].map((m) => loadModel(monsterPath(m)).then(tick));
+  await Promise.all([arenaJob, sfxJob, ...modelJobs]);
+
+  // Place the saved army
+  await Promise.all(save.board.map((b) => createUnit({ team: 'player', ...b })));
+  renderer.compile(scene, camera);
+  $('loading').classList.remove('show');
+  $('top').classList.remove('hidden');
+  applySettings();
+  audio.setBlocked(!platform.isAudioEnabled());
+  document.documentElement.lang = ['en'].includes(detectLanguage()) ? detectLanguage() : 'en';
+  platform.gameReady();
+  updateSignIn();
+  await setupLevel();
+
+  // Daily gift
+  if (save.lastDaily !== today()) {
+    const y = new Date(); y.setDate(y.getDate() - 1);
+    const yesterday = `${y.getFullYear()}-${y.getMonth() + 1}-${y.getDate()}`;
+    save.streak = save.lastDaily === yesterday ? (save.streak || 0) + 1 : 1;
+    dailyAmount = Math.round((40 + save.level * 6) * Math.min(3, 1 + (save.streak - 1) * 0.25));
+    if (save.level > 1 || save.lastDaily) {
+      $('dailyDay').textContent = `Day ${save.streak}`;
+      $('dailyCoins').textContent = formatNum(dailyAmount);
+      $('dailyDoubleBtn').classList.toggle('hidden', !platform.hasRewarded);
+      showScreen('daily', true);
+    } else save.lastDaily = today();
+  }
+  // Music after the game is playable
+  audio.load('music_prep', 'assets/audio/music_prep.mp3').then(() => setMusic());
+  audio.load('music_battle', 'assets/audio/music_battle.mp3');
+}
+
+if (platform.name === 'local') {
+  window.__mma = {
+    save, units, get state() { return state; }, buy, startBattle, merge, playerUnits, enemyUnits,
+    sim(sec) { for (let t = 0; t < sec; t += 1 / 30) { if (state === 'battle') updateBattle(1 / 30); updateProjectiles(1 / 30); for (const u of units) u.mixer.update(1 / 30); updateTweens(1 / 30); } },
+    setLevel: async (l) => { save.level = l; await setupLevel(); },
+    // Balance test: give the player an army of `count` tier-1 units, merged like a real player, then fight
+    async testLevel(level, count, meleeShare = 0.6, fight = true) {
+      for (const u of [...units]) removeUnit(u);
+      save.level = level;
+      const board = [];
+      const split = (n) => { const t = []; for (let k = 10; k >= 1; k--) { const v = 1 << (k - 1); while (n >= v) { t.push(k); n -= v; } } return t; };
+      const nm = Math.round(count * meleeShare), nr = count - nm;
+      const tm = split(nm), tr = split(nr);
+      while (tm.length + tr.length > 15) { const l = tm.length >= tr.length ? tm : tr; l.sort((a, b) => a - b); const a = l.shift(), b2 = l.shift(); l.push(Math.max(a, b2) + 1); }
+      tm.sort((a, b) => b - a).forEach((t, i) => board.push({ type: 'melee', tier: Math.min(10, t), row: Math.floor(i / 5), col: i % 5 }));
+      tr.sort((a, b) => b - a).forEach((t, i) => { const j = 14 - i; board.push({ type: 'ranged', tier: Math.min(10, t), row: Math.floor(j / 5), col: j % 5 }); });
+      await Promise.all(board.map((b) => createUnit({ team: 'player', ...b })));
+      await setupLevel();
+      battleBoard = board;
+      if (!fight) return 'ready';
+      startBattle();
+      let t = 0;
+      while (state === 'battle' && t < 95) { this.sim(1); t += 1; }
+      const pl = units.filter((u) => u.team === 'player' && u.alive).length;
+      const en = units.filter((u) => u.team === 'enemy' && u.alive).length;
+      showScreen('win', false); showScreen('lose', false);
+      return { level, count, won: en === 0 && pl > 0, time: t, playerLeft: pl, enemyLeft: en, you: armyPower(board.map((b) => ({ stats: unitStats(b.type, b.tier) }))), foe: armyPower(enemyUnits()) };
+    },
+    camera, scene, expected,
+    // Bot that plays like a sensible player (no ads): buys with all coins, merges pairs, fights.
+    async autoplay(toLevel, opts = {}) {
+      const log = [];
+      const quickMerge = async (a, b) => { removeUnit(a); removeUnit(b); await createUnit({ team: 'player', type: b.type, tier: b.tier + 1, row: b.row, col: b.col }); };
+      const mergeAll = async () => {
+        for (let again = true; again;) {
+          again = false;
+          const list = playerUnits().filter((u) => u.alive).sort((a, b) => a.tier - b.tier);
+          for (let i = 0; i < list.length && !again; i++) for (let j = i + 1; j < list.length; j++) {
+            if (list[i].type === list[j].type && list[i].tier === list[j].tier && list[i].tier < tierCap(save.level)) { await quickMerge(list[i], list[j]); again = true; break; }
+          }
+        }
+      };
+      let tries = 0;
+      while (save.level <= toLevel) {
+        // Spend: keep about 40% flyers
+        for (let guard = 0; guard < 200; guard++) {
+          await mergeAll();
+          const pu = playerUnits();
+          const val = (tp) => pu.filter((u) => u.type === tp).reduce((n, u) => n + unitValue(u.tier), 0);
+          const all = pu.reduce((n, u) => n + unitValue(u.tier), 0) || 1;
+          let type = val('ranged') / all < (opts.flyShare ?? 0.35) ? 'ranged' : 'melee';
+          if (save.level >= MAGE_UNLOCK && val('mage') / all < (opts.mageShare ?? 0.15)) type = 'mage';
+          if (save.coins < buyPrice(save.buys[type])) break;
+          if (!emptyPlayerCells().length) {
+            // Board full with no pairs: sell the weakest to make room
+            const weak = pu.sort((a, b) => a.tier - b.tier)[0];
+            if (!weak || weak.tier >= 6) break;
+            removeUnit(weak); save.coins += sellValue(weak.type, weak.tier, save.buys[weak.type]);
+            continue;
+          }
+          await buy(type);
+        }
+        await mergeAll();
+        for (let i = 0; i < 8; i++) this.sim(0.1);
+        battleBoard = savedBoard(); save.board = battleBoard;
+        const you = armyPower(playerUnits()), foe = armyPower(enemyUnits());
+        startBattle();
+        let t = 0;
+        while (state === 'battle' && t < 160) { this.sim(0.5); t += 0.5; if (currentLevel && currentLevel.final) await new Promise((r) => setTimeout(r, 0)); }
+        const won = enemyUnits().filter((u) => u.alive).length === 0;
+        tries++;
+        log.push({ L: save.level, won, you, foe, budget: save.foe && save.foe.budget, losses: save.foe && save.foe.losses });
+        if (opts.log) console.log('>> ' + JSON.stringify(log[log.length - 1]));
+        await new Promise((r) => setTimeout(r, 0));
+        showScreen('win', false); showScreen('lose', false);
+        // Same bookkeeping as afterResult (no ads, chest coins added directly)
+        const L = save.level;
+        if (won) { save.coins += winCoins(L) + (L % 5 === 0 ? winCoins(L) * 3 : 0); save.level++; if (isFinalLevel(L)) save.legend = true; }
+        else { save.coins += Math.max(5, Math.round(winCoins(L) * 0.3)); save.foe.losses++; }
+        if (tries > (opts.maxTries || 400)) break;
+        state = 'result';
+        await restoreArmy(battleBoard);
+        await this.quickSetup();
+      }
+      return log;
+    },
+    async finalTrials(n, board) {
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        for (const u of [...units]) removeUnit(u);
+        await Promise.all(board.map((b) => createUnit({ team: 'player', ...b })));
+        save.board = board; save.foe = null;
+        await this.quickSetup();
+        battleBoard = board;
+        startBattle();
+        let t = 0;
+        while (state === 'battle' && t < 160) { this.sim(0.5); t += 0.5; await new Promise((r) => setTimeout(r, 0)); }
+        const boss = units.find((u) => u.final);
+        out.push({ won: enemyUnits().filter((u) => u.alive).length === 0, t, phase: boss ? boss.phase : -1, bossHp: boss ? Math.round(100 * boss.hp / boss.maxHp) : 0, devoured: boss ? boss.devoured : 0, budget: save.foe && save.foe.budget });
+        showScreen('win', false); showScreen('lose', false);
+      }
+      return out;
+    },
+    async quickSetup() {
+      for (const u of enemyUnits()) removeUnit(u);
+      const L = currentArmy();
+      currentLevel = L;
+      await Promise.all(L.units.map((e) => createUnit({ team: 'enemy', ...e })));
+      if (L.final) { preloadFinal(); await loadModel(monsterPath('P_Slime_Shadow')); await loadModel(monsterPath('P_Bat_Eye')); }
+      if (L.boss) await createUnit(bossOpts(L.boss)).then((b) => { b.bossName = L.boss.name; });
+      state = 'prep';
+    },
+    step(dt) { forcedDt = dt; frame(); forcedDt = null; },
+    async setupDemo(board, level, opts = {}) {
+      for (const u of [...units]) removeUnit(u);
+      save.level = level;
+      save.discovered = { melee: 10, ranged: 10 };
+      save.coins = opts.coins || 2400;
+      hintShown = true;
+      await Promise.all(board.map((b) => createUnit({ team: 'player', ...b })));
+      battleBoard = board;
+      if (!opts.deferLevel) await setupLevel();
+      $('hint').classList.add('hidden');
+    },
+    setupLevel: () => setupLevel(), legendFinale: () => legendFinale(), get currentLevel() { return currentLevel; },
+    demoMerge(type, tier) {
+      const list = playerUnits().filter((u) => u.alive && u.type === type && u.tier === tier);
+      const [a, b] = list;
+      if (!a || !b) return 'no pair';
+      const hand = document.createElement('div');
+      hand.className = 'demo-hand'; hand.innerHTML = icon('hand');
+      document.body.appendChild(hand);
+      const start = a.group.position.clone();
+      const end = b.group.position.clone();
+      a.play('move');
+      for (const o of playerUnits()) if (o !== a && o.type === type && o.tier === tier) o.mergeGlow = true;
+      tween(0.12, (k) => a.group.scale.setScalar(1 + 0.15 * k));
+      tween(0.75, (k) => {
+        const e = easeOutCubic(Math.min(1, k * 1.15));
+        a.group.position.lerpVectors(start, end, e);
+        a.group.position.y = Math.sin(Math.min(1, k * 1.15) * Math.PI) * 1.2 + (k > 0.1 ? 0.6 : 0);
+        tmp.copy(a.group.position).setY(a.height * 0.4).project(camera);
+        hand.style.transform = `translate(${(tmp.x * 0.5 + 0.5) * innerWidth}px, ${(-tmp.y * 0.5 + 0.5) * innerHeight}px)`;
+      }, () => {
+        for (const o of playerUnits()) o.mergeGlow = false;
+        hand.remove();
+        merge(a, b);
+      });
+      return 'ok';
+    },
+    clickFight() { battleBoard = savedBoard(); startBattle(); },
+    hero(px, py, pz, lx, ly, lz) { camZoom = { pos: new THREE.Vector3(px, py, pz), look: new THREE.Vector3(lx, ly, lz), k: 1 }; },
+    heroOff() { camZoom = null; },
+    setCapZoom(z) { capZoom = z; },
+    cleanUnits() { for (const u of units) { u.flash = 0; u.hpBar.visible = false; if (u.badge) u.badge.visible = false; for (const m of u.mats) { m.emissive && m.baseEm && m.emissive.copy(m.baseEm); } } },
+    get battleOver() { return state === 'result'; }, applyTheme: (i) => applyTheme(i), arenaIntro: () => arenaIntro(), restartLevel: () => restartLevel(), newGame: () => newGame(), screenOf(u) { const v = u.group.position.clone().setY(u.height * 0.5); v.project(camera); return [(v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight]; },
+  };
+}
+
+if (!CAPTURE) requestAnimationFrame(frame);
+boot().catch((e) => {
+  console.error(e);
+  $('loading').innerHTML = '<div class="logo"><b>Oops!</b><span style="font-size:16px">Could not load the game. Please refresh.</span></div>';
+});
