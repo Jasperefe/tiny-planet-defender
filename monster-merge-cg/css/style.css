@@ -393,3 +393,30 @@ i[data-ico] { font-style: normal; display: inline-flex; }
 .signin-btn .ico { width: 18px; height: 18px; }
 @media (max-width: 420px) { .signin-btn { height: 32px; padding: 0 7px; font-size: 11px; } .signin-btn span { max-width: none; } }
 .short-land .signin-btn { height: 30px; }
+
+/* ---------- Mage button ---------- */
+.buy-btn.mage { flex: none; flex-direction: row; gap: 8px; padding: 6px 16px; margin-bottom: 2px;
+  background: linear-gradient(#7ae0ff, #2a9ae0); box-shadow: 0 5px 0 #1a6ab0; pointer-events: auto; }
+.buy-btn.mage .buy-ico .ico { width: 24px; height: 24px; }
+.buy-btn.mage.new { animation: magePop 1.2s ease-in-out infinite; }
+@keyframes magePop { 50% { transform: scale(1.08); } }
+.short-land .buy-btn.mage { position: fixed; left: max(10px, env(safe-area-inset-left)); bottom: calc(max(12px, env(safe-area-inset-bottom)) + 128px); width: 116px; padding: 4px 6px 6px; flex-wrap: wrap; justify-content: center; gap: 2px 6px; }
+/* ---------- Monster book tabs & bestiary ---------- */
+.book-tabs { display: flex; gap: 6px; justify-content: center; }
+.book-tabs button { font-family: var(--font); font-weight: 900; font-size: 13px; padding: 8px 12px; border-radius: 12px; border: 3px solid #fff; background: #e9d8b5; color: var(--ink); cursor: pointer; }
+.book-tabs button.on { background: linear-gradient(#c391ff, #7d45e8); color: #fff; }
+.book-card.locked img { filter: brightness(0) opacity(.4); }
+.book-card .t { font-size: 10px; }
+.best-sec { text-align: left; font-weight: 900; margin: 8px 0 4px; font-size: 15px; }
+.book-card.cap { opacity: .55; }
+/* Short landscape phones: keep the whole guide card on screen */
+@media (max-height: 460px) and (orientation: landscape) {
+  .panel.guide { width: min(640px, 92vw); padding-top: 26px; gap: 6px; margin-top: 18px; }
+  .panel.guide .ribbon { font-size: 17px; }
+  .g-art { min-height: 0; padding: 4px; }
+  .g-art img { width: 60px; height: 60px; }
+  .g-text { font-size: 14px; line-height: 1.25; }
+  .g-elem, .g-tip { padding: 4px 6px; font-size: 11px; }
+  .g-nav .btn { padding-top: 6px; padding-bottom: 6px; }
+  .unlock-card .g-art img, .panel.unlock .g-art img { width: 70px; height: 70px; }
+}

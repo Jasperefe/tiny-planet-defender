@@ -5,16 +5,17 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { platform, hooks, detectLanguage } from './platform.js?v=20261117171009';
-import { AudioManager } from './audio.js?v=20261117171009';
+import { platform, hooks, detectLanguage } from './platform.js?v=20261118084653';
+import { AudioManager } from './audio.js?v=20261118084653';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
   buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
   ELEMENTS, ARENAS, arenaIndex, arenaTwist, unitValue, coinUnits, enemyBudget, mercy,
-} from './data.js?v=20261117171009';
-import { isProc, procFlying, procBig, buildCreature } from './creatures.js?v=20261117171009';
-import { icon, applyIcons } from './icons.js?v=20261117171009';
-import { THEMES, themeIndex, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261117171009';
+  LINE_KEYS, MAGE_UNLOCK, TIER_TITLES, TIER_ACCESSORY, TIER_UNLOCK, tierCap, ENEMIES, BOSSES,
+} from './data.js?v=20261118084653';
+import { isProc, procFlying, procBig, buildCreature, PROC } from './creatures.js?v=20261118084653';
+import { icon, applyIcons } from './icons.js?v=20261118084653';
+import { THEMES, themeIndex, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261118084653';
 
 // ============================================================ Helpers
 const $ = (id) => document.getElementById(id);
@@ -76,9 +77,10 @@ let forcedDt = null;
 
 // ============================================================ State
 const save = {
-  level: 1, coins: START_COINS, buys: { melee: 0, ranged: 0 },
+  level: 1, coins: START_COINS, buys: { melee: 0, ranged: 0, mage: 0 },
   board: [{ type: 'melee', tier: 1, row: 0, col: 2 }, { type: 'melee', tier: 1, row: 0, col: 1 }],
-  discovered: { melee: 1, ranged: 0 },
+  discovered: { melee: 1, ranged: 0, mage: 0 },
+  defeated: {}, mageUnlocked: false, tierSeen: {},
   sfx: true, music: true, lastDaily: '', streak: 0, levelsSinceAd: 0, freeUsedLevel: 0,
   foe: null, // { level, budget, losses } the enemy army stays the same on retries
   guideSeen: false, elemSeen: {},
@@ -677,6 +679,32 @@ function findClip(anims, names) {
 
 // Number badge texture per tier and team
 const badgeCache = new Map();
+// Accessories for monster levels 11-15
+function buildAccessory(kind, color, height, radius) {
+  const g = new THREE.Group();
+  const glowM = (c, i = 1.6) => new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: i, roughness: 0.4 });
+  const top = height * 1.02;
+  if (kind === 'crown') {
+    const gold = glowM(0xffd23a, 0.5);
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.1, 18, 1, true), gold); band.material.side = THREE.DoubleSide; band.position.y = top; g.add(band);
+    for (let j = 0; j < 5; j++) { const a = (j / 5) * TAU; const c = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.26, 6), gold); c.position.set(Math.cos(a) * 0.27, top + 0.15, Math.sin(a) * 0.27); g.add(c); }
+    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.08), glowM(color.getHex())); gem.position.set(0, top + 0.02, 0.3); g.add(gem);
+  } else if (kind === 'halo') {
+    const t = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.055, 10, 36), glowM(0xffe680, 2)); t.rotation.x = Math.PI / 2 - 0.2; t.position.y = top + 0.35; g.add(t);
+    g.userData.spin = t;
+  } else if (kind === 'wings') {
+    for (const sd of [-1, 1]) for (let j = 0; j < 4; j++) { const f = new THREE.Mesh(new THREE.ConeGeometry(0.11, 1.0 - j * 0.14, 6), glowM(j % 2 ? 0xffc23a : 0xff7a1a, 1.4)); f.position.set(sd * (0.45 + j * 0.16), height * 0.62 + j * 0.1, -radius * 0.7); f.rotation.z = sd * (-0.9 + j * 0.12); g.add(f); }
+    g.userData.flap = true;
+  } else if (kind === 'spikes') {
+    for (const sd of [-1, 1]) for (let j = 0; j < 3; j++) { const c = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.42, 6), glowM(0xff3a2a, 1.0)); c.position.set(sd * (radius * 1.1 + j * 0.05), height * 0.72 + j * 0.13, -0.1 - j * 0.1); c.rotation.z = sd * -0.8; g.add(c); }
+  } else if (kind === 'stars') {
+    const orbit = new THREE.Group(); orbit.position.y = height * 0.55; g.add(orbit);
+    for (let j = 0; j < 6; j++) { const a = (j / 6) * TAU; const st = new THREE.Mesh(new THREE.OctahedronGeometry(0.11), glowM(j % 2 ? 0x7af0ff : 0xff6ad8, 2)); st.position.set(Math.cos(a) * (radius + 0.7), Math.sin(j) * 0.35, Math.sin(a) * (radius + 0.7)); orbit.add(st); }
+    g.userData.spin = orbit;
+  }
+  return g;
+}
+
 function badgeTexture(tier, team, element, hidden) {
   const key = `${tier}${team}${element || ''}${hidden ? 'h' : ''}`;
   if (badgeCache.has(key)) return badgeCache.get(key);
@@ -684,7 +712,7 @@ function badgeTexture(tier, team, element, hidden) {
   c.width = c.height = 64;
   const g = c.getContext('2d');
   g.beginPath(); g.arc(32, 32, 27, 0, TAU);
-  g.fillStyle = hidden ? '#4a2a7a' : team === 'player' ? (tier >= 9 ? '#ffb400' : '#2a86e8') : '#e0344a';
+  g.fillStyle = hidden ? '#4a2a7a' : team === 'player' ? (tier >= 11 ? '#' + new THREE.Color(AURA_COLORS[tier]).multiplyScalar(0.75).getHexString() : tier >= 9 ? '#ffb400' : '#2a86e8') : '#e0344a';
   g.fill();
   g.lineWidth = element ? 7 : 5; g.strokeStyle = element ? ELEMENTS[element].css : '#fff'; g.stroke();
   g.fillStyle = '#fff'; g.font = '900 34px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
@@ -715,7 +743,7 @@ class Unit {
   async init() {
     const t = await loadModel(monsterPath(this.model));
     const obj = cloneSkinned(t.scene);
-    const height = this.height * (this.model.startsWith('Big_') || procBig(this.model) ? 1.3 : 1);
+    const height = Math.min(4.2, this.height * (this.model.startsWith('Big_') || procBig(this.model) ? 1.3 : 1));
     this.height = height;
     const s = height / Math.max(t.size.y, t.size.x * 0.72);
     obj.scale.setScalar(s);
@@ -741,6 +769,14 @@ class Unit {
       m.baseEm = base;
       m.emissive.copy(base);
       m.emissiveIntensity = 1;
+    }
+    // Levels 9+: aura ring; levels 11+: an accessory (crown, fire wings, halo, spikes, star orbit)
+    if (this.tier >= 9 && !this.isBoss) {
+      const ac = new THREE.Color(AURA_COLORS[this.tier] || 0xffc93c);
+      this.auraRing = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: ac.clone().multiplyScalar(1.4), transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending }));
+      this.auraRing.position.y = 0.04; this.auraRing.scale.setScalar(this.radius * 2.3 + 0.4); this.auraRing.renderOrder = 3;
+      this.group.add(this.auraRing);
+      if (TIER_ACCESSORY[this.tier]) { this.acc = buildAccessory(TIER_ACCESSORY[this.tier], ac, height, this.radius); this.inner.add(this.acc); }
     }
     // Element ring on the ground
     if (elem) {
@@ -840,7 +876,7 @@ async function createUnit(opts) {
     case 'fire': powerMul = 1.22; break;
     case 'poison': powerMul = 1.2; break;
   }
-  const height = opts.isBoss ? 4.4 : unitHeight(opts.type, opts.tier) * (opts.tier > 8 ? 1 + (opts.tier - 8) * 0.12 : 1);
+  const height = opts.isBoss ? 4.4 : unitHeight(opts.type, opts.tier);
   const u = new Unit({ ...opts, model, aura, flying, stats, height, maxHp: stats.hp, hp: stats.hp, powerMul, dots: [], slow: 0 });
   await u.init();
   u.home = cellPos(u.team, u.row, u.col);
@@ -887,7 +923,7 @@ function savedBoard() {
 function armyPower(list) {
   // Lanchester-style strength: sqrt(total HP x total DPS)
   let hp = 0, dps = 0;
-  for (const u of list) { const k = u.powerMul || 1; hp += u.stats.hp * Math.sqrt(k); dps += (u.stats.dmg / u.stats.interval) * Math.sqrt(k); }
+  for (const u of list) { const k = u.powerMul || 1; hp += u.stats.hp * Math.sqrt(k); dps += ((u.stats.dmg + (u.stats.heal || 0) * 0.7) / u.stats.interval) * Math.sqrt(k); }
   return Math.round(Math.sqrt(hp * dps) / 4);
 }
 function updatePower() {
@@ -909,9 +945,10 @@ function emptyPlayerCells() {
 
 // Preload the models a player is likely to need soon
 function preloadPlayerTiers() {
-  for (const line of ['melee', 'ranged']) {
+  for (const line of LINE_KEYS) {
+    if (line === 'mage' && save.level < MAGE_UNLOCK) continue;
     const top = Math.max(1, save.discovered[line] || 1);
-    for (let t = 1; t <= Math.min(MAX_TIER, top + 1); t++) loadModel(monsterPath(tierInfo(line, t).model));
+    for (let t = 1; t <= Math.min(MAX_TIER, top + 1, 8); t++) loadModel(monsterPath(tierInfo(line, t).model));
   }
 }
 
@@ -955,6 +992,7 @@ async function setupLevel() {
   showBottom(true);
   if (newArena || (save.level - 1) % 10 === 0) await arenaIntro();
   if (!save.guideSeen) await openGuide();
+  await maybeUnlocks();
   await maybeElementCard(L);
   if (L.boss) await bossIntro(boss);
   else showBanner(`LEVEL ${save.level}`);
@@ -1111,12 +1149,16 @@ function updateLevelUI() {
 
 function updateShopUI() {
   $('coinNum').textContent = formatNum(save.coins);
-  const pm = buyPrice(save.buys.melee), pr = buyPrice(save.buys.ranged);
+  const pm = buyPrice(save.buys.melee), pr = buyPrice(save.buys.ranged), pg = buyPrice(save.buys.mage || 0);
   $('priceMelee').textContent = formatNum(pm);
   $('priceRanged').textContent = formatNum(pr);
+  $('priceMage').textContent = formatNum(pg);
   const full = emptyPlayerCells().length === 0;
   $('buyMelee').classList.toggle('poor', save.coins < pm || full);
   $('buyRanged').classList.toggle('poor', save.coins < pr || full);
+  $('buyMage').classList.toggle('hidden', save.level < MAGE_UNLOCK);
+  $('buyMage').classList.toggle('poor', save.coins < pg || full);
+  $('buyMage').classList.toggle('new', save.level >= MAGE_UNLOCK && !(save.discovered.mage > 0));
   $('freeBtn').classList.toggle('hidden', !platform.hasRewarded || full || save.freeUsedLevel === save.level || state !== 'prep');
 }
 
@@ -1137,12 +1179,14 @@ async function buy(type, free = false, tierOverride = 1) {
   if (!cells.length) { audio.play('denied'); flashFull(); return; }
   const price = buyPrice(save.buys[type]);
   if (!free) {
-    if (save.coins < price) { audio.play('denied'); shakeButton(type === 'melee' ? 'buyMelee' : 'buyRanged'); return; }
+    if (save.coins < price) { audio.play('denied'); shakeButton({ melee: 'buyMelee', ranged: 'buyRanged', mage: 'buyMage' }[type]); return; }
     save.coins -= price;
     save.buys[type]++;
   }
   // Brawlers prefer the front, flyers the back
-  cells.sort((a, b) => (type === 'melee' ? a.row - b.row : b.row - a.row) || Math.abs(a.col - 2) - Math.abs(b.col - 2));
+  // Brawlers prefer the front, flyers the back, mages the middle
+  const rowScore = (c) => (type === 'melee' ? c.row : type === 'ranged' ? -c.row : Math.abs(c.row - 1) * 2 + (c.row === 0 ? 1 : 0));
+  cells.sort((a, b) => rowScore(a) - rowScore(b) || Math.abs(a.col - 2) - Math.abs(b.col - 2));
   const cell = cells[0];
   audio.play('coins', { volume: 0.6 });
   const u = await createUnit({ team: 'player', type, tier: tierOverride, row: cell.row, col: cell.col });
@@ -1201,6 +1245,7 @@ async function discover(type, tier, unit, celebrate) {
   $('newMonImg').src = await thumbnail(info.model, AURA_COLORS[tier]);
   $('newMonName').textContent = info.name;
   $('newMonTier').textContent = `${LINES[type].name} · Level ${tier}`;
+  document.querySelector('#newMon .ribbon').textContent = 'NEW MONSTER!';
   audio.play('levelup', { volume: 0.8, vary: 0 });
   setTimeout(() => showScreen('newMon', true), 450);
 }
@@ -1261,7 +1306,7 @@ canvas.addEventListener('pointerdown', (e) => {
   tween(0.12, (k) => u.group.scale.setScalar(1 + 0.15 * k));
   audio.play('pickup', { volume: 0.5 });
   // Show which monsters can merge with it
-  for (const o of playerUnits()) if (o !== u && o.type === u.type && o.tier === u.tier && u.tier < MAX_TIER) o.mergeGlow = true;
+  for (const o of playerUnits()) if (o !== u && o.type === u.type && o.tier === u.tier && u.tier < tierCap(save.level)) o.mergeGlow = true;
 });
 canvas.addEventListener('pointermove', (e) => {
   if (!drag) return;
@@ -1273,7 +1318,7 @@ canvas.addEventListener('pointermove', (e) => {
   drag.moved = true;
   const c = posToCell(u.group.position);
   const other = c && unitAt('player', c.row, c.col);
-  const mergeable = other && other !== u && other.type === u.type && other.tier === u.tier && u.tier < MAX_TIER;
+  const mergeable = other && other !== u && other.type === u.type && other.tier === u.tier && u.tier < tierCap(save.level);
   setHighlight(c, mergeable || !other || other === u);
 });
 function endDrag(e) {
@@ -1300,7 +1345,15 @@ function endDrag(e) {
   if (!c) { back(); return; }
   const other = unitAt('player', c.row, c.col);
   if (other === u || (!other && c.row === u.row && c.col === u.col)) { back(); return; }
-  if (other && other.type === u.type && other.tier === u.tier && u.tier < MAX_TIER) { merge(u, other); return; }
+  if (other && other.type === u.type && other.tier === u.tier) {
+    if (u.tier < tierCap(save.level)) { merge(u, other); return; }
+    // At the level cap: tell the player when the next level unlocks
+    const next = u.tier + 1;
+    if (next <= MAX_TIER) showBanner(`REACH LEVEL ${TIER_UNLOCK[next]} FOR ${TIER_TITLES[next].toUpperCase()}!`, 'red');
+    else showBanner('MAX LEVEL!', 'gold');
+    audio.play('denied');
+    back(); return;
+  }
   if (other) {
     // Swap places
     other.row = u.row; other.col = u.col;
@@ -1358,7 +1411,7 @@ function startBattle() {
     u.hpBar.visible = true;
     if (u.badge) u.badge.visible = false;
     u.setHp(u.maxHp);
-    u.dots = []; u.slow = 0;
+    u.dots = []; u.slow = 0; u.stun = 0;
     u.cooldown = rand(0.2, 0.6);
     u.target = null;
   }
@@ -1439,6 +1492,10 @@ function updateDots(u, dt) {
 
 function killUnit(u) {
   u.alive = false;
+  if (u.team === 'enemy') {
+    if (!save.defeated) save.defeated = {};
+    save.defeated[u.isBoss ? 'boss:' + u.bossName : u.model] = 1;
+  }
   u.hpBar.visible = false;
   u.play('death', 0.1);
   audio.play('die', { volume: 0.6 });
@@ -1462,13 +1519,13 @@ function slowMo(seconds) {
 // Projectiles for flyers
 const projectiles = [];
 const orbGeo = new THREE.SphereGeometry(0.22, 12, 8);
-function shoot(from, to, dmg, team, tier, splash) {
-  const color = team === 'player' ? new THREE.Color(0.6, 1.8, 2.6) : new THREE.Color(2.6, 0.8, 1.6);
+function shoot(from, to, dmg, team, tier, splash, opts = {}) {
+  const color = opts.color || (team === 'player' ? new THREE.Color(0.6, 1.8, 2.6) : new THREE.Color(2.6, 0.8, 1.6));
   const m = new THREE.Mesh(orbGeo, new THREE.MeshBasicMaterial({ color }));
   m.scale.setScalar(0.8 + tier * 0.12);
   m.position.copy(from.group.position).setY(from.height * 0.6 + 0.6);
   scene.add(m);
-  projectiles.push({ mesh: m, from, to, dmg, color, splash, speed: 13 });
+  projectiles.push({ mesh: m, from, to, dmg, color, splash, speed: 13, stun: opts.stun || 0 });
   audio.play('shoot', { volume: 0.35, gap: 0.05 });
 }
 function updateProjectiles(dt) {
@@ -1483,8 +1540,12 @@ function updateProjectiles(dt) {
     }
     if (d < 0.4) {
       dealDamage(p.from, target, p.dmg);
+      if (p.stun && target.alive && !target.isBoss) target.stun = Math.max(target.stun, p.stun);
       if (p.splash) {
-        for (const o of units) if (o.alive && o.team === target.team && o !== target && o.group.position.distanceTo(target.group.position) < p.splash) dealDamage(p.from, o, p.dmg * 0.5, true);
+        for (const o of units) if (o.alive && o.team === target.team && o !== target && o.group.position.distanceTo(target.group.position) < p.splash) {
+          dealDamage(p.from, o, p.dmg * 0.5, true);
+          if (p.stun && o.alive && !o.isBoss) o.stun = Math.max(o.stun, p.stun * 0.6);
+        }
         groundRing(target.group.position, p.color, p.splash * 1.2, 0.35);
       }
       audio.play('orb_hit', { volume: 0.4, gap: 0.05 });
@@ -1492,6 +1553,61 @@ function updateProjectiles(dt) {
     }
     p.mesh.position.addScaledVector(tmp.sub(p.mesh.position).normalize(), Math.min(d, p.speed * dt));
     glow.spawn(p.mesh.position, tmp2.set(0, 0, 0), p.color, 0.45, 0.25);
+  }
+}
+
+// ---- Mages: heal a hurt neighbour, otherwise cast an area spell (stuns from level 5)
+const MAGE_COLORS = [0xfff27a, 0x7af0ff, 0xff7a1a, 0x9ae6ff, 0xfff066, 0xc08aff, 0x5af0ff, 0xffe066];
+function healTarget(u) {
+  let best = null, worst = 0.85;
+  for (const o of units) {
+    if (!o.alive || o.team !== u.team) continue;
+    const r = o.hp / o.maxHp;
+    if (r < worst && o.group.position.distanceTo(u.group.position) <= u.stats.healRadius + o.radius) { worst = r; best = o; }
+  }
+  return best;
+}
+function mageAct(u, t, dx, dz, dist, reach, dt, slowK) {
+  if (u.pendingHit >= 0) { u.pendingHit -= dt; if (u.pendingHit < 0) mageRelease(u); }
+  const hurt = healTarget(u);
+  if (dist > reach && !hurt) {
+    const sp = u.stats.speed * dt * slowK;
+    u.group.position.x += (dx / dist) * sp;
+    u.group.position.z += (dz / dist) * sp;
+    if (u.current !== u.actions.attack || !u.current.isRunning()) u.play('move', 0.15);
+    return;
+  }
+  u.cooldown -= dt * slowK;
+  if (u.cooldown <= 0) {
+    u.cooldown = u.stats.interval * rand(0.92, 1.08);
+    const a = u.actions.attack;
+    if (a) {
+      a.reset(); a.setEffectiveTimeScale(Math.max(1, a.getClip().duration / (u.stats.interval * 0.85)));
+      if (u.current && u.current !== a) a.crossFadeFrom(u.current, 0.08, false);
+      a.play(); u.current = a;
+    }
+    u.castHeal = hurt;
+    u.castTarget = dist <= reach ? t : null;
+    u.pendingHit = u.stats.interval * 0.32;
+  } else if (u.current !== u.actions.attack || !u.current.isRunning()) u.play('idle', 0.15);
+}
+function mageRelease(u) {
+  const h = u.castHeal;
+  if (h && h.alive && h.hp < h.maxHp) {
+    const amount = Math.round(u.stats.heal * rand(0.9, 1.1));
+    h.setHp(h.hp + amount);
+    const p = h.group.position.clone().setY(h.height * 0.8 + (h.flying ? 0.6 : 0));
+    floatText(p, '+' + formatNum(amount), 'heal');
+    burst(p, C.green, 16, 3, 0.45, 0.6, 3);
+    groundRing(h.group.position, C.green, 1.8, 0.45);
+    glow.spawn(u.group.position.clone().setY(u.height + 0.4), tmp2.set(0, 2, 0), C.green, 0.6, 0.5, 0);
+    audio.play('bell', { volume: 0.25, rate: 1.4, gap: 0.08 });
+    return;
+  }
+  const t = u.castTarget;
+  if (t && t.alive) {
+    const col = new THREE.Color(MAGE_COLORS[Math.min(u.tier, 8) - 1]).multiplyScalar(2);
+    shoot(u, t, u.stats.dmg, u.team, u.tier, u.stats.spellSplash, { color: col, stun: u.stats.stun });
   }
 }
 
@@ -1503,6 +1619,12 @@ function updateBattle(dt) {
     const slowK = u.slow > 0 ? 0.7 : 1;
     if (u.slow > 0) u.slow -= dt;
     if (u.hitTimer > 0) { u.hitTimer -= dt; if (u.hitTimer <= 0) u.play('idle', 0.1); }
+    // Stunned by a Mage spell: no moving or attacking
+    if (u.stun > 0) {
+      u.stun -= dt;
+      if (Math.random() < dt * 8) glow.spawn(tmp.copy(u.group.position).setY(u.height + (u.flying ? 1 : 0.3)), tmp2.set(rand(-0.6, 0.6), 0.2, rand(-0.6, 0.6)), C.gold, 0.25, 0.4, 0);
+      continue;
+    }
     // Knockback slide
     if (u.knock.lengthSq() > 0.0001) {
       u.group.position.addScaledVector(u.knock, dt * 6);
@@ -1521,6 +1643,7 @@ function updateBattle(dt) {
     let da = ang - u.group.rotation.y;
     da = Math.atan2(Math.sin(da), Math.cos(da));
     u.group.rotation.y += da * Math.min(1, dt * 10);
+    if (u.type === 'mage' && !u.isBoss) { mageAct(u, t, dx, dz, dist, reach, dt, slowK); continue; }
     if (u.pendingHit >= 0) {
       u.pendingHit -= dt;
       if (u.pendingHit < 0) {
@@ -1680,9 +1803,14 @@ async function watchRewarded(id) {
   else showBanner('NO AD RIGHT NOW', 'red');
   return ok;
 }
+function unlockedLines() { return save.level >= MAGE_UNLOCK ? LINE_KEYS : ['melee', 'ranged']; }
+function freeTier() {
+  const best = Math.max(...LINE_KEYS.map((l) => save.discovered[l] || 0), 1);
+  return Math.max(1, Math.min(tierCap(save.level) - 1, best - 2));
+}
 async function giveFreeMonster() {
-  const tier = Math.max(1, Math.max(save.discovered.melee || 1, save.discovered.ranged || 1) - 2);
-  const type = Math.random() < 0.5 ? 'melee' : 'ranged';
+  const tier = freeTier();
+  const type = pick(unlockedLines());
   if (emptyPlayerCells().length) await buy(type, true, tier);
   else { save.coins += sellValue(type, tier, save.buys[type]) * 2; bumpCoins(); showBanner('BOARD FULL: BONUS COINS!', 'gold'); }
   updateShopUI(); updatePower(); persist();
@@ -1734,15 +1862,15 @@ async function tapChest() {
   shake = 0.4;
   const coins = winCoins(chest.level) * 3;
   flyCoins(open.position.clone().setY(1.2), 14);
-  const freeTier = Math.max(1, Math.max(save.discovered.melee || 1, save.discovered.ranged || 1) - 2);
+  const freeTierNow = freeTier();
   const cells = emptyPlayerCells();
-  const freeType = Math.random() < 0.6 ? 'melee' : 'ranged';
+  const freeType = pick(unlockedLines());
   $('chestCoins').textContent = formatNum(coins);
-  $('chestExtra').textContent = cells.length ? `+ FREE ${tierInfo(freeType, freeTier).name.toUpperCase()}!` : '';
+  $('chestExtra').textContent = cells.length ? `+ FREE ${tierInfo(freeType, freeTierNow).name.toUpperCase()}!` : '';
   await wait(1.0);
   $('chestDoubleBtn').classList.toggle('hidden', !platform.hasRewarded);
   showScreen('chestWin', true);
-  chest.reward = { coins, freeTier, freeType, cells: cells.length };
+  chest.reward = { coins, freeTier: freeTierNow, freeType, cells: cells.length };
   chest.open = open;
 }
 
@@ -1814,27 +1942,119 @@ async function thumbnail(model, aura) {
   return url;
 }
 
+// Display names for the bestiary
+const PROC_NAMES = {
+  P_Slime_Green: 'Green Slime', P_Slime_Shadow: 'Shadow Slime', P_Slime_Lava: 'Lava Slime', P_Golem_Sand: 'Sand Golem', P_Golem_Ice: 'Ice Golem',
+  P_Golem_Lava: 'Lava Golem', P_Golem_Crystal: 'Crystal Golem', P_Golem_Moss: 'Moss Golem', P_Snowman: 'Snowman Brute', P_Cactus: 'Cactus Brute',
+  P_Bat_Eye: 'Eyeball Bat', P_Bat_Frost: 'Frost Bat', P_Bat_Sand: 'Sand Bat', P_Wisp_Fire: 'Fire Wisp', P_Wisp_Crystal: 'Crystal Wisp', P_Pumpkin: 'Pumpkin Ghost',
+};
+function enemyName(model) {
+  if (PROC_NAMES[model]) return PROC_NAMES[model];
+  const parts = model.split('_');
+  const kind = parts.shift();
+  let name = parts.filter((p) => p !== 'Evolved').join(' ');
+  if (parts.includes('Evolved')) name = 'Elder ' + name;
+  return (kind === 'Big' ? 'Giant ' : kind === 'Flying' ? 'Flying ' : '') + name;
+}
+// Bestiary layout: each arena's creatures and boss, then the wild monsters
+function bestiaryGroups() {
+  const seen = new Set();
+  const groups = ARENAS.map((a, i) => {
+    const list = [...a.melee, ...a.ranged].filter((m) => !seen.has(m) && seen.add(m)).map((m) => ({ key: m, model: m, name: enemyName(m) }));
+    list.push({ key: 'boss:' + a.boss.name, model: a.boss.model, name: a.boss.name.split(' ').map((w) => w[0] + w.slice(1).toLowerCase()).join(' '), boss: true });
+    return { title: THEMES[i].name, list };
+  });
+  const wild = [];
+  for (const t of Object.keys(ENEMIES)) for (const type of ['melee', 'ranged']) for (const m of ENEMIES[t][type]) if (!seen.has(m)) { seen.add(m); wild.push({ key: m, model: m, name: enemyName(m) }); }
+  groups.push({ title: 'WILD MONSTERS', list: wild });
+  return groups;
+}
+function bookCard(model, name, sub, known, aura, extraCls = '') {
+  const card = document.createElement('div');
+  card.className = 'book-card' + (known ? '' : ' locked') + extraCls;
+  card.innerHTML = `<img alt=""><div>${known ? name : '???'}</div><div class="t">${sub}</div>`;
+  thumbnail(model, aura).then((url) => { card.querySelector('img').src = url; });
+  return card;
+}
+let bookTab = 'mine';
 async function openBook() {
   showScreen('book', true);
-  let found = 0;
-  for (const line of ['melee', 'ranged']) {
-    const grid = $(line === 'melee' ? 'bookMelee' : 'bookRanged');
+  // Your monsters: 3 lines x 15 levels
+  let mine = 0;
+  const cap = tierCap(save.level);
+  for (const line of LINE_KEYS) {
+    const grid = $({ melee: 'bookMelee', ranged: 'bookRanged', mage: 'bookMage' }[line]);
     grid.innerHTML = '';
     for (let t = 1; t <= MAX_TIER; t++) {
-      const card = document.createElement('div');
       const known = (save.discovered[line] || 0) >= t;
-      card.className = 'book-card' + (known ? '' : ' locked');
-      if (known) {
-        found++;
-        const info = tierInfo(line, t);
-        card.innerHTML = `<img alt=""><div>${info.name}</div><div class="t">Lv ${t}</div>`;
-        thumbnail(info.model, AURA_COLORS[t]).then((url) => { card.querySelector('img').src = url; });
-      } else card.innerHTML = `<div class="q">?</div><div class="t">Lv ${t}</div>`;
-      grid.appendChild(card);
+      if (known) mine++;
+      const info = tierInfo(line, t);
+      let sub = `Lv ${t}`;
+      if (!known && line === 'mage' && save.level < MAGE_UNLOCK) sub = `Unlocks at level ${MAGE_UNLOCK}`;
+      else if (!known && t > cap) sub = `Lv ${t} · level ${TIER_UNLOCK[t]}`;
+      if (known) grid.appendChild(bookCard(info.model, info.name, sub, true, AURA_COLORS[t]));
+      else {
+        const card = document.createElement('div');
+        card.className = 'book-card locked' + (t > cap ? ' cap' : '');
+        card.innerHTML = `<div class="q">${t > cap || sub.startsWith('Unlocks') ? icon('lock') : '?'}</div><div class="t">${sub}</div>`;
+        grid.appendChild(card);
+      }
     }
   }
-  $('bookProgress').textContent = `${found} / ${MAX_TIER * 2} discovered`;
+  // Bestiary: every enemy type and boss you have defeated
+  const best = $('bookBest');
+  best.innerHTML = '';
+  let beaten = 0, total = 0;
+  for (const g of bestiaryGroups()) {
+    const h = document.createElement('div'); h.className = 'best-sec'; h.textContent = g.title; best.appendChild(h);
+    const grid = document.createElement('div'); grid.className = 'book-grid'; best.appendChild(grid);
+    for (const e of g.list) {
+      total++;
+      const known = !!(save.defeated && save.defeated[e.key]);
+      if (known) beaten++;
+      grid.appendChild(bookCard(e.model, e.name, known ? (e.boss ? 'Boss defeated' : 'Defeated') : (e.boss ? 'Boss' : 'Not defeated'), known));
+    }
+  }
+  $('countMine').textContent = `${mine}/${MAX_TIER * LINE_KEYS.length}`;
+  $('countBest').textContent = `${beaten}/${total}`;
+  $('bookProgress').textContent = `${mine + beaten} / ${MAX_TIER * LINE_KEYS.length + total} collected`;
+  setBookTab(bookTab);
   audio.play('book', { volume: 0.7 });
+}
+function setBookTab(tab) {
+  bookTab = tab;
+  $('tabMine').classList.toggle('on', tab === 'mine');
+  $('tabBest').classList.toggle('on', tab === 'best');
+  $('bookMine').classList.toggle('hidden', tab !== 'mine');
+  $('bookBest').classList.toggle('hidden', tab !== 'best');
+}
+
+// Big card for unlocks (Mages, new monster levels)
+let unlockDone = null;
+async function showUnlockCard({ ribbon, model, aura, name, text }) {
+  const rib = document.querySelector('#newMon .ribbon');
+  const old = rib.textContent;
+  rib.textContent = ribbon;
+  $('newMonImg').src = await thumbnail(model, aura);
+  $('newMonName').textContent = name;
+  $('newMonTier').textContent = text;
+  audio.play('levelup', { volume: 0.8, vary: 0 });
+  showScreen('newMon', true);
+  await new Promise((r) => { unlockDone = r; });
+  rib.textContent = old;
+}
+async function maybeUnlocks() {
+  if (save.level >= MAGE_UNLOCK && !save.mageUnlocked) {
+    save.mageUnlocked = true; persist();
+    await showUnlockCard({ ribbon: 'NEW CLASS!', model: 'P_Mage_Sprite', name: 'MAGES UNLOCKED!', text: 'Mages heal nearby friends and cast area spells. Keep them in the MIDDLE row, behind your Brawlers!' });
+  }
+  const cap = tierCap(save.level);
+  if (!save.tierSeen) save.tierSeen = {};
+  if (cap > 10 && !save.tierSeen[cap]) {
+    for (let t = 11; t <= cap; t++) save.tierSeen[t] = 1;
+    persist();
+    await showUnlockCard({ ribbon: 'NEW POWER!', model: tierInfo('melee', 8).model, aura: AURA_COLORS[cap], name: `${TIER_TITLES[cap].toUpperCase()} UNLOCKED!`, text: `Merge two Level ${cap - 1} monsters to create a ${TIER_TITLES[cap]} monster!` });
+  }
 }
 
 // ============================================================ Save / load
@@ -1859,6 +2079,7 @@ const audio = new AudioManager();
 const click = (id, fn) => $(id).addEventListener('click', (e) => { e.stopPropagation(); audio.unlock(); audio.play('click', { volume: 0.6 }); fn(); });
 click('buyMelee', () => buy('melee'));
 click('buyRanged', () => buy('ranged'));
+click('buyMage', () => buy('mage'));
 click('fightBtn', () => { battleBoard = savedBoard(); save.board = battleBoard; persist(); startBattle(); });
 click('freeBtn', async () => {
   const ok = await watchRewarded('free_monster');
@@ -1898,8 +2119,11 @@ click('chestDoubleBtn', async () => {
 });
 click('claimBtn', () => afterResult(true, pendingReward));
 click('retryBtn', () => afterResult(false, pendingReward));
+click('tabMine', () => setBookTab('mine'));
+click('tabBest', () => setBookTab('best'));
 click('newMonBtn', () => {
   showScreen('newMon', false);
+  if (unlockDone) { const d = unlockDone; unlockDone = null; d(); }
   timeScale = 1;
   if (camZoom) tween(0.4, (k) => { if (camZoom) camZoom.k = 1 - k; }, () => { camZoom = null; });
 });
@@ -1970,9 +2194,9 @@ async function newGame() {
   showScreen('win', false); showScreen('lose', false);
   timeScale = 1; slowMoTimer = 0; camZoom = null;
   Object.assign(save, {
-    level: 1, coins: START_COINS, buys: { melee: 0, ranged: 0 },
+    level: 1, coins: START_COINS, buys: { melee: 0, ranged: 0, mage: 0 },
     board: [{ type: 'melee', tier: 1, row: 0, col: 2 }, { type: 'melee', tier: 1, row: 0, col: 1 }],
-    discovered: { melee: 1, ranged: 0 }, levelsSinceAd: 0, freeUsedLevel: 0, foe: null,
+    discovered: { melee: 1, ranged: 0, mage: 0 }, levelsSinceAd: 0, freeUsedLevel: 0, foe: null, mageUnlocked: false, tierSeen: {},
   });
   hintShown = false;
   battleBoard = save.board.slice();
@@ -2060,6 +2284,11 @@ function frame() {
     }
     // Flyers hover
     if (u.flying) u.inner.position.y = 0.7 + Math.sin(elapsed * 2.5 + u.bob) * 0.15;
+    if (u.acc) {
+      if (u.acc.userData.spin) u.acc.userData.spin.rotation.y += raw * 1.5;
+      if (u.acc.userData.flap) u.acc.rotation.x = Math.sin(elapsed * 6 + u.bob) * 0.08;
+    }
+    if (u.auraRing) u.auraRing.material.opacity = u.alive ? 0.55 + Math.sin(elapsed * 3 + u.bob) * 0.25 : 0;
     // Element aura: pulsing ring and particles
     if (u.elemRing && u.alive) {
       u.elemRing.material.opacity = 0.55 + Math.sin(elapsed * 4 + u.bob) * 0.3;
@@ -2132,8 +2361,10 @@ async function boot() {
     const data = await platform.loadData();
     if (data && data.level) {
       Object.assign(save, data);
-      save.buys = Object.assign({ melee: 0, ranged: 0 }, data.buys || {});
-      save.discovered = Object.assign({ melee: 1, ranged: 0 }, data.discovered || {});
+      save.buys = Object.assign({ melee: 0, ranged: 0, mage: 0 }, data.buys || {});
+      save.discovered = Object.assign({ melee: 1, ranged: 0, mage: 0 }, data.discovered || {});
+      save.defeated = data.defeated || {};
+      save.tierSeen = data.tierSeen || {};
     }
     tick();
   });
@@ -2216,7 +2447,7 @@ if (platform.name === 'local') {
           again = false;
           const list = playerUnits().filter((u) => u.alive).sort((a, b) => a.tier - b.tier);
           for (let i = 0; i < list.length && !again; i++) for (let j = i + 1; j < list.length; j++) {
-            if (list[i].type === list[j].type && list[i].tier === list[j].tier && list[i].tier < MAX_TIER) { await quickMerge(list[i], list[j]); again = true; break; }
+            if (list[i].type === list[j].type && list[i].tier === list[j].tier && list[i].tier < tierCap(save.level)) { await quickMerge(list[i], list[j]); again = true; break; }
           }
         }
       };
@@ -2226,9 +2457,10 @@ if (platform.name === 'local') {
         for (let guard = 0; guard < 200; guard++) {
           await mergeAll();
           const pu = playerUnits();
-          const flyers = pu.filter((u) => u.type === 'ranged').reduce((n, u) => n + unitValue(u.tier), 0);
+          const val = (tp) => pu.filter((u) => u.type === tp).reduce((n, u) => n + unitValue(u.tier), 0);
           const all = pu.reduce((n, u) => n + unitValue(u.tier), 0) || 1;
-          const type = flyers / all < (opts.flyShare ?? 0.4) ? 'ranged' : 'melee';
+          let type = val('ranged') / all < (opts.flyShare ?? 0.35) ? 'ranged' : 'melee';
+          if (save.level >= MAGE_UNLOCK && val('mage') / all < (opts.mageShare ?? 0.15)) type = 'mage';
           if (save.coins < buyPrice(save.buys[type])) break;
           if (!emptyPlayerCells().length) {
             // Board full with no pairs: sell the weakest to make room

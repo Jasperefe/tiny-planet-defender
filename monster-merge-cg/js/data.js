@@ -30,15 +30,40 @@ export const LINES = {
       { model: 'Flying_Dragon_Evolved', name: 'Elder Dragon' },
     ],
   },
+  mage: {
+    name: 'Mages',
+    tiers: [
+      { model: 'P_Mage_Sprite', name: 'Spark Sprite' },
+      { model: 'P_Mage_Imp', name: 'Crystal Imp' },
+      { model: 'P_Mage_Witch', name: 'Flame Witch' },
+      { model: 'P_Mage_Sage', name: 'Frost Sage' },
+      { model: 'P_Mage_Storm', name: 'Storm Wizard' },
+      { model: 'P_Mage_Oracle', name: 'Shadow Oracle' },
+      { model: 'P_Mage_Arcane', name: 'Arcane Golem' },
+      { model: 'P_Mage_Star', name: 'Star Archmage' },
+    ],
+  },
 };
-export const MAX_TIER = 10;
-export const AURA_COLORS = { 9: 0xffc93c, 10: 0xff4df0 };
+export const LINE_KEYS = ['melee', 'ranged', 'mage'];
+export const MAGE_UNLOCK = 10; // level that unlocks the Mage line
+export const MAX_TIER = 15;
+// Levels 9+ reuse the top model with a title, an aura and (from 11) an accessory
+export const TIER_TITLES = { 9: 'Golden', 10: 'Cosmic', 11: 'Mythic', 12: 'Legendary', 13: 'Divine', 14: 'Titan', 15: 'Eternal' };
+export const AURA_COLORS = { 9: 0xffc93c, 10: 0xff4df0, 11: 0x3dff8a, 12: 0xff8a1a, 13: 0xfff2b0, 14: 0xff2a3a, 15: 0x8a6aff };
+export const TIER_ACCESSORY = { 11: 'crown', 12: 'wings', 13: 'halo', 14: 'spikes', 15: 'stars' };
+// Monster levels 11-15 unlock with your progress, so the book lasts well past level 100
+export const TIER_UNLOCK = { 11: 40, 12: 60, 13: 80, 14: 100, 15: 120 };
+export function tierCap(level) {
+  let cap = 10;
+  for (let t = 11; t <= MAX_TIER; t++) if (level >= TIER_UNLOCK[t]) cap = t;
+  return cap;
+}
 
 export function tierInfo(line, tier) {
   const list = LINES[line].tiers;
   const base = list[Math.min(tier, list.length) - 1];
   const extra = tier > list.length ? tier - list.length : 0;
-  const name = extra ? `${['', 'Golden', 'Cosmic'][extra]} ${base.name}` : base.name;
+  const name = extra ? `${TIER_TITLES[tier]} ${base.name}` : base.name;
   return { model: base.model, name, extra };
 }
 
@@ -74,12 +99,18 @@ export function unitStats(type, tier) {
   if (type === 'melee') {
     return { hp: Math.round(100 * k), dmg: Math.round(14 * k), interval: 1.0, range: 1.7, speed: 3.4 };
   }
+  if (type === 'mage') {
+    // Support caster: heals hurt neighbours, otherwise casts an area spell (stuns from level 5)
+    return { hp: Math.round(60 * k), dmg: Math.round(9 * k), heal: Math.round(16 * k), interval: 1.6, range: 6, speed: 2.8, healRadius: 3.0, spellSplash: 1.8, stun: tier >= 5 ? 0.6 : 0 };
+  }
   return { hp: Math.round(65 * k), dmg: Math.round(12 * k), interval: 1.25, range: 7.5, speed: 3.0 };
 }
 
 // Visual height of a unit by tier (world units, a board tile is 2 wide)
 export function unitHeight(type, tier) {
-  return (type === 'melee' ? 1.9 : 1.65) + 0.18 * (tier - 1);
+  // Grows up to level 10, then only a little so giants still fit on a square
+  const t = Math.min(tier, 8) - 1 + Math.max(0, tier - 8) * 0.3;
+  return (type === 'melee' ? 1.9 : type === 'mage' ? 1.75 : 1.65) + 0.18 * t;
 }
 
 // ---------------------------------------------------------------- Economy
@@ -138,13 +169,13 @@ export function arenaTwist(level) {
 export const unitValue = (tier) => Math.pow(2, tier - 1);
 export function coinUnits(coins, buys) {
   // How many tier-1 monsters these coins could buy (alternating lines)
-  let n = 0, c = coins, bm = buys.melee || 0, br = buys.ranged || 0;
+  let n = 0, c = coins;
+  const b = { melee: buys.melee || 0, ranged: buys.ranged || 0, mage: buys.mage || 0 };
   for (let i = 0; i < 400; i++) {
-    const useM = buyPrice(bm) <= buyPrice(br);
-    const p = buyPrice(useM ? bm : br);
+    const line = Object.keys(b).reduce((x, y) => (buyPrice(b[y]) < buyPrice(b[x]) ? y : x));
+    const p = buyPrice(b[line]);
     if (c < p) break;
-    c -= p; n++;
-    if (useM) bm++; else br++;
+    c -= p; n++; b[line]++;
   }
   return n;
 }
@@ -153,7 +184,7 @@ export function coinUnits(coins, buys) {
 // Level 1 is a fair fight, from level 3 the enemy is a little stronger than you.
 export function enemyBudget(level, armyUnits, spareCoinUnits) {
   const curve = expected[Math.min(level + 1, 1001)];
-  const k = [0, 0.8, 0.95, 1.0, 1.04][level] || Math.min(1.32, 1.06 + level * 0.004);
+  const k = [0, 0.8, 0.95, 1.0, 1.04][level] || Math.min(1.26, 1.06 + level * 0.004);
   const potential = armyUnits + spareCoinUnits * 0.75;
   return Math.max(2, Math.round(Math.max(curve * (level <= 3 ? 0.55 : 0.8), potential * k)));
 }
@@ -193,7 +224,7 @@ export function buildLevel(level, budgetIn) {
   // Binary split of the budget into tiers, then merge down to fit the grid
   let tiers = [];
   let rem = budget;
-  for (let t = 10; t >= 1; t--) {
+  for (let t = tierCap(level); t >= 1; t--) {
     const v = 1 << (t - 1);
     while (rem >= v && tiers.length < 40) { tiers.push(t); rem -= v; }
   }
@@ -215,7 +246,7 @@ export function buildLevel(level, budgetIn) {
   const hideChance = level < 6 ? 0 : Math.min(0.55, 0.2 + (level - 6) * 0.012);
   for (const t of tiers) {
     const type = r() < rangedShare ? 'ranged' : 'melee';
-    const tier = Math.min(t, MAX_TIER);
+    const tier = Math.min(t, tierCap(level));
     const seed = Math.floor(r() * 100);
     // Arena creatures mixed with the classic enemy roster
     const roster = arena[type];

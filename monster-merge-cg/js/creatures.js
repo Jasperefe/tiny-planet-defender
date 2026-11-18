@@ -25,6 +25,15 @@ export const PROC = {
   P_Wisp_Fire: { kind: 'wisp', variant: 'fire', flying: true },
   P_Wisp_Crystal: { kind: 'wisp', variant: 'crystal', flying: true },
   P_Pumpkin: { kind: 'pumpkin', variant: 'night', flying: true },
+  // Player Mages line (support casters)
+  P_Mage_Sprite: { kind: 'mage', variant: 'sprite' },
+  P_Mage_Imp: { kind: 'mage', variant: 'imp' },
+  P_Mage_Witch: { kind: 'mage', variant: 'witch' },
+  P_Mage_Sage: { kind: 'mage', variant: 'sage' },
+  P_Mage_Storm: { kind: 'mage', variant: 'storm' },
+  P_Mage_Oracle: { kind: 'mage', variant: 'oracle' },
+  P_Mage_Arcane: { kind: 'mage', variant: 'arcane' },
+  P_Mage_Star: { kind: 'mage', variant: 'star' },
 };
 export const isProc = (name) => name in PROC;
 export const procFlying = (name) => !!(PROC[name] && PROC[name].flying);
@@ -567,6 +576,356 @@ function buildPumpkin() {
   return { scene: root, animations: A.clips };
 }
 
+
+// ---------------------------------------------------------------- Mages (player support line)
+let starGeo = null;
+function starShape() {
+  if (starGeo) return starGeo;
+  const sh = new THREE.Shape();
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * TAU + Math.PI / 2, r = i % 2 ? 0.45 : 1;
+    i ? sh.lineTo(Math.cos(a) * r, Math.sin(a) * r) : sh.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+  }
+  starGeo = new THREE.ExtrudeGeometry(sh, { depth: 0.3, bevelEnabled: true, bevelSize: 0.1, bevelThickness: 0.1, bevelSegments: 2 });
+  starGeo.center();
+  return starGeo;
+}
+// Robe with soft vertical folds and a wavy hem
+function robeGeo() {
+  return geo('robe2', () => {
+    const g = new THREE.CylinderGeometry(0.4, 0.84, 1.25, 40, 8, true);
+    const p = g.attributes.position, v = new THREE.Vector3();
+    for (let i = 0; i < p.count; i++) {
+      v.fromBufferAttribute(p, i);
+      const t = (0.625 - v.y) / 1.25; // 0 at top, 1 at hem
+      const a = Math.atan2(v.z, v.x);
+      const k = 1 + 0.07 * Math.sin(a * 9) * t * t;
+      p.setXYZ(i, v.x * k, v.y - (t > 0.95 ? 0.04 * Math.sin(a * 9) : 0), v.z * k);
+    }
+    g.computeVertexNormals();
+    return g;
+  });
+}
+const sleeveGeo = () => geo('sleeve', () => {
+  const pts = [[0.09, 0], [0.11, 0.1], [0.14, 0.3], [0.2, 0.48], [0.24, 0.55]].map(([x, y]) => new THREE.Vector2(x, y));
+  const g = new THREE.LatheGeometry(pts, 20); g.rotateX(Math.PI); return g; // narrow at the shoulder, wide at the wrist
+});
+function hatGeoTip(tall) {
+  // Three stacked, slightly bent cone segments so the hat tip can flop
+  return [0.36, 0.25, 0.14].map((r, i) => ({ r, h: (0.42 - i * 0.06) * tall }));
+}
+function wizardHat(color, band, tall, starDeco) {
+  const hat = G('hat');
+  const m = mat(color, { roughness: 0.65 });
+  hat.add(M(geo('brim', () => new THREE.CylinderGeometry(0.66, 0.7, 0.05, 32)), m));
+  hat.add(M(geo('crown', () => new THREE.CylinderGeometry(0.36, 0.4, 0.22, 28)), m, { p: [0, 0.13, 0] }));
+  if (band) hat.add(M(geo('band', () => new THREE.CylinderGeometry(0.405, 0.405, 0.07, 28)), mat(band, { roughness: 0.4, metalness: 0.3 }), { p: [0, 0.08, 0] }));
+  let parent = hat, y = 0.24;
+  hatGeoTip(tall).forEach(({ r, h }, i) => {
+    const seg = G(i === 0 ? 'hatTip' : 'hatTip' + i, [0, y, 0], [i ? -0.22 : -0.1, 0, 0]);
+    seg.add(M(geo('hatseg' + i + tall, () => new THREE.CylinderGeometry(i === 2 ? 0.01 : r * 0.62, r, h, 20)), m, { p: [0, h / 2, 0] }));
+    parent.add(seg); parent = seg; y = i === 0 ? h : h; seg.userData.h = h;
+    if (i === 0) y = h; 
+  });
+  if (starDeco) hat.add(M(starShape(), glowMat(0xffe066, 1.1), { p: [0.16, 0.42, 0.3], r: [0, 0.4, 0], s: 0.08 }));
+  return hat;
+}
+function staff(orbColor, len, topper) {
+  const g = G('staff');
+  const wood = mat(0x7a4a22, { roughness: 0.75 });
+  // Twisted wooden shaft
+  const curve = new THREE.CatmullRomCurve3([[0, 0, 0], [0.04, len * 0.3, 0.02], [-0.03, len * 0.6, -0.02], [0.02, len * 0.88, 0]].map((v) => new THREE.Vector3(...v)));
+  g.add(M(geo('shaft' + len, () => new THREE.TubeGeometry(curve, 24, 0.045, 8, false)), wood, { p: [0, -0.35, 0] }));
+  // Claw holder and the glowing focus
+  const top = G('orb', [0.02, len - 0.3, 0]);
+  for (let i = 0; i < 3; i++) { const a = (i / 3) * TAU; top.add(M(cone(6), wood, { p: [Math.cos(a) * 0.1, -0.06, Math.sin(a) * 0.1], r: [Math.sin(a) * 0.5, 0, -Math.cos(a) * 0.5], s: [0.035, 0.22, 0.035] })); }
+  if (topper === 'star') top.add(M(starShape(), glowMat(orbColor, 1.7), { p: [0, 0.12, 0], s: 0.22 }));
+  else if (topper === 'crystal') top.add(M(octa(), mat(orbColor, { emissive: orbColor, emissiveIntensity: 1.2, roughness: 0.1, flatShading: true }), { p: [0, 0.12, 0], s: [0.12, 0.26, 0.12] }));
+  else top.add(M(sphere(18), glowMat(orbColor, 1.9), { p: [0, 0.08, 0], s: 0.15 }));
+  top.add(M(sphere(12), mat(orbColor, { emissive: orbColor, emissiveIntensity: 1, transparent: true, opacity: 0.28, depthWrite: false }), { p: [0, 0.1, 0], s: 0.27 }));
+  g.add(top);
+  return g;
+}
+function face(head, o) {
+  const skinM = mat(o.skin, { roughness: 0.6 });
+  head.add(M(sphere(24), skinM, { s: [0.42, 0.4, 0.4] }));
+  for (const x of [-1, 1]) head.add(M(sphere(10), skinM, { p: [x * 0.4, 0, 0], s: [0.06, 0.1, 0.06] }));
+  head.add(M(sphere(10), mat(o.skin, { roughness: 0.5, color: new THREE.Color(o.skin).multiplyScalar(0.92) }), { p: [0, -0.04, 0.4], s: [0.065, 0.06, 0.06] }));
+  for (const x of [-0.15, 0.15]) head.add(at(eye(0.12, o.iris || 0x3a2a1a), x, 0.05, 0.3));
+  // Eyelids for blinking (closed = scale 1 on y)
+  const lids = G('lids', [0, 0.11, 0.32], [0, 0, 0]);
+  lids.scale.set(1, 0.08, 1);
+  for (const x of [-0.15, 0.15]) lids.add(M(sphere(12), skinM, { p: [x, -0.05, 0], s: [0.13, 0.13, 0.08] }));
+  head.add(lids);
+  const browM = mat(o.brow || 0x4a2a1a, { roughness: 0.9 });
+  for (const x of [-1, 1]) head.add(M(capsule(), browM, { p: [x * 0.15, 0.2, 0.36], r: [0, 0, Math.PI / 2 + x * (o.angry ? 0.35 : -0.15)], s: [0.025, 0.05, 0.025] }));
+  for (const x of [-1, 1]) head.add(M(sphere(8), mat(0xff9a8a, { transparent: true, opacity: 0.8 }), { p: [x * 0.27, -0.1, 0.3], s: [0.07, 0.04, 0.02] }));
+  if (!o.beard) head.add(M(torus(), mat(0x6a2a2a), { p: [0, -0.15, 0.37], r: [0, 0, Math.PI], s: [0.06, 0.045, 0.04] }));
+  else {
+    const bm = mat(o.beard, { roughness: 0.95 });
+    const beard = G('beard', [0, -0.2, 0.25]);
+    head.add(beard);
+    beard.add(M(sphere(16), bm, { p: [0, -0.1, 0.02], s: [0.3, 0.22, 0.17] }));
+    beard.add(M(cone(14), bm, { p: [0, -0.42, 0.05], r: [Math.PI - 0.15, 0, 0], s: [0.24, 0.45, 0.14] }));
+    for (const x of [-1, 1]) beard.add(M(sphere(10), bm, { p: [x * 0.11, 0.1, 0.14], r: [0, 0, x * 0.45], s: [0.12, 0.05, 0.05] }));
+  }
+}
+function robedMage(o) {
+  const root = G('root');
+  const rig = G('rig', [0, 0.1, 0]);
+  root.add(rig);
+  const body = G('body');
+  rig.add(body);
+  const robeM = mat(o.robe, { roughness: 0.75, side: THREE.DoubleSide });
+  const trimM = mat(o.trim, { roughness: 0.45, metalness: 0.25 });
+  const hem = G('hem', [0, 0.62, 0]);
+  body.add(hem);
+  hem.add(M(robeGeo(), robeM));
+  for (const x of [-0.18, 0.18]) body.add(M(sphere(12), mat(0x3a2414, { roughness: 0.7 }), { p: [x, 0.04, 0.55], s: [0.13, 0.08, 0.2] }));
+  body.add(M(sphere(20), robeM, { p: [0, 1.28, 0], s: [0.48, 0.42, 0.43] }));
+  body.add(M(geo('belt', () => new THREE.TorusGeometry(0.43, 0.05, 8, 32)), trimM, { p: [0, 1.03, 0], r: [Math.PI / 2, 0, 0] }));
+  body.add(M(geo('buckle', () => new THREE.BoxGeometry(1, 1, 1)), mat(0xffd84a, { metalness: 0.6, roughness: 0.3 }), { p: [0, 1.03, 0.44], s: [0.12, 0.1, 0.04] }));
+  body.add(M(geo('stole', () => new THREE.BoxGeometry(1, 1, 1)), trimM, { p: [0, 0.68, 0.53], r: [-0.3, 0, 0], s: [0.16, 0.9, 0.03] }));
+  if (o.cape) {
+    const capeM = mat(o.cape, { side: THREE.DoubleSide, roughness: 0.6 });
+    const cape = G('cape', [0, 1.45, -0.1]);
+    rig.add(cape);
+    cape.add(M(geo('cape2', () => new THREE.CylinderGeometry(0.42, 0.9, 1.45, 24, 4, true, Math.PI * 0.55, Math.PI * 0.9)), capeM, { p: [0, -0.7, -0.05] }));
+  }
+  const head = G('head', [0, 1.85, 0]);
+  rig.add(head);
+  if (o.hat === 'hood') {
+    const hoodM = mat(o.robe, { roughness: 0.75, side: THREE.DoubleSide });
+    head.add(M(geo('hood', () => new THREE.SphereGeometry(1, 28, 18, 0, TAU, 0, Math.PI * 0.62)), hoodM, { r: [-0.35, 0, 0], s: [0.55, 0.6, 0.55] }));
+    head.add(M(sphere(18), mat(0x0c0618, { roughness: 1 }), { p: [0, 0, 0.04], s: [0.4, 0.4, 0.4] }));
+    head.add(M(cone(14), hoodM, { p: [0, 0.38, -0.32], r: [-1.1, 0, 0], s: [0.22, 0.6, 0.22] }));
+    for (const x of [-0.13, 0.13]) head.add(at(glowEye(0.07, o.eyes || 0xc08aff), x, 0.02, 0.5));
+  } else {
+    face(head, o);
+    if (o.hat === 'witch' || o.hat === 'wizard') { const h = wizardHat(o.hatColor, o.band, o.hat === 'wizard' ? 1.35 : 1.0, o.hat === 'wizard'); h.position.y = 0.28; h.rotation.z = -0.08; head.add(h); }
+  }
+  for (const side of [-1, 1]) {
+    const arm = G(side < 0 ? 'armL' : 'armR', [side * 0.48, 1.42, 0.02]);
+    rig.add(arm);
+    arm.add(M(sleeveGeo(), robeM, { r: [0, 0, side * 0.35], p: [side * 0.02, 0, 0] }));
+    arm.add(M(sphere(12), mat(o.hat === 'hood' ? 0x3a2a4a : o.skin), { p: [side * 0.2, -0.56, 0.02], s: [0.1, 0.11, 0.1] }));
+    if (side > 0) { const st = staff(o.orb, 2.0, o.topper); st.position.set(0.22, -0.9, 0.08); arm.add(st); }
+  }
+  if (o.halo) rig.add(M(geo('halo', () => new THREE.TorusGeometry(0.34, 0.045, 10, 40)), glowMat(0xffd84a, 1.5), { p: [0, 2.62, -0.05], r: [Math.PI / 2 - 0.25, 0, 0] }));
+  if (o.orbit) {
+    const orbit = G('orbit', [0, 1.3, 0]);
+    rig.add(orbit);
+    for (let i = 0; i < 3; i++) { const a = (i / 3) * TAU; orbit.add(M(sphere(12), glowMat(o.orbit, 2), { p: [Math.cos(a) * 0.95, Math.sin(i * 2) * 0.25, Math.sin(a) * 0.95], s: 0.1 })); }
+  }
+  return root;
+}
+
+function buildSprite() {
+  const root = G('root');
+  const rig = G('rig', [0, 0.95, 0]);
+  root.add(rig);
+  const body = G('body');
+  rig.add(body);
+  body.add(M(sphere(28), mat(0xffe27a, { roughness: 0.3, emissive: 0xffb820, emissiveIntensity: 0.3 }), { s: [0.62, 0.58, 0.58] }));
+  body.add(M(sphere(16), mat(0xfff6c8, { roughness: 0.4 }), { p: [0, -0.18, 0.35], s: [0.36, 0.3, 0.2] }));
+  for (const x of [-0.2, 0.2]) body.add(at(eye(0.17, 0x2a6ae0), x, 0.08, 0.44));
+  const lids = G('lids', [0, 0.2, 0.47]); lids.scale.set(1, 0.08, 1);
+  for (const x of [-0.2, 0.2]) lids.add(M(sphere(12), mat(0xffe27a), { p: [x, -0.05, 0], s: [0.18, 0.17, 0.08] }));
+  body.add(lids);
+  body.add(M(torus(), mat(0x8a4a10), { p: [0, -0.12, 0.54], r: [0, 0, Math.PI], s: [0.08, 0.06, 0.05] }));
+  for (const x of [-1, 1]) body.add(M(sphere(8), mat(0xff9a6a, { transparent: true, opacity: 0.8 }), { p: [x * 0.36, -0.05, 0.42], s: [0.08, 0.05, 0.02] }));
+  // Hair tuft and spark antenna
+  for (let i = 0; i < 3; i++) body.add(M(cone(8), mat(0xffc83a), { p: [-0.1 + i * 0.1, 0.56, 0.05], r: [0.2, 0, -0.4 + i * 0.4], s: [0.06, 0.2, 0.06] }));
+  const orb = G('orb', [0.08, 1.02, 0]);
+  body.add(M(geo('ant', () => new THREE.TubeGeometry(new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0.5, 0), new THREE.Vector3(0.1, 0.75, 0), new THREE.Vector3(0.08, 0.95, 0)]), 12, 0.02, 6)), mat(0xd8a020)));
+  body.add(orb);
+  orb.add(M(starShape(), glowMat(0xfff27a, 2.2), { s: 0.1 }));
+  orb.add(M(sphere(10), mat(0xfff27a, { emissive: 0xfff27a, emissiveIntensity: 1, transparent: true, opacity: 0.3, depthWrite: false }), { s: 0.2 }));
+  const wingM = mat(0xd8f6ff, { transparent: true, opacity: 0.7, side: THREE.DoubleSide, roughness: 0.15, emissive: 0x9ae6ff, emissiveIntensity: 0.35 });
+  for (const side of [-1, 1]) {
+    const w = G(side < 0 ? 'wingL' : 'wingR', [side * 0.3, 0.2, -0.3]);
+    body.add(w);
+    w.add(M(sphere(14), wingM, { p: [side * 0.4, 0.24, 0], r: [0, 0, side * -0.5], s: [0.44, 0.22, 0.02] }));
+    w.add(M(sphere(14), wingM, { p: [side * 0.32, -0.12, 0], r: [0, 0, side * 0.5], s: [0.3, 0.16, 0.02] }));
+  }
+  for (const x of [-1, 1]) body.add(M(sphere(10), mat(0xffc83a), { p: [x * 0.2, -0.55, 0.05], s: [0.1, 0.08, 0.13] }));
+  return root;
+}
+function buildImp() {
+  const root = G('root');
+  const rig = G('rig', [0, 0.12, 0]);
+  root.add(rig);
+  const body = G('body');
+  rig.add(body);
+  const skin = mat(0x9a5ae0, { roughness: 0.45 });
+  body.add(M(sphere(24), skin, { p: [0, 0.75, 0], s: [0.5, 0.55, 0.45] }));
+  body.add(M(sphere(16), mat(0xd8b8ff), { p: [0, 0.68, 0.3], s: [0.3, 0.32, 0.18] }));
+  for (const x of [-0.22, 0.22]) { body.add(M(capsule(), skin, { p: [x, 0.2, 0], s: [0.12, 0.12, 0.12] })); body.add(M(sphere(10), skin, { p: [x, 0.04, 0.08], s: [0.14, 0.07, 0.18] })); }
+  // Tail with a spade tip
+  const tail = G('tail', [0, 0.45, -0.4]);
+  body.add(tail);
+  tail.add(M(geo('tailT', () => new THREE.TubeGeometry(new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, -0.1, -0.3), new THREE.Vector3(0, 0.15, -0.55), new THREE.Vector3(0, 0.4, -0.6)]), 16, 0.04, 8)), skin));
+  tail.add(M(octa(), mat(0x3a1a50), { p: [0, 0.45, -0.6], s: [0.1, 0.12, 0.03] }));
+  const head = G('head', [0, 1.45, 0]);
+  rig.add(head);
+  head.add(M(sphere(22), skin, { s: [0.45, 0.4, 0.42] }));
+  for (const x of [-1, 1]) head.add(M(cone(8), skin, { p: [x * 0.44, 0.05, 0], r: [0, 0, x * -1.3], s: [0.08, 0.2, 0.05] }));
+  for (const x of [-0.16, 0.16]) head.add(at(eye(0.13, 0xd03a7a), x, 0.04, 0.33));
+  const lids = G('lids', [0, 0.14, 0.36]); lids.scale.set(1, 0.08, 1);
+  for (const x of [-0.16, 0.16]) lids.add(M(sphere(12), skin, { p: [x, -0.05, 0], s: [0.14, 0.14, 0.08] }));
+  head.add(lids);
+  head.add(M(torus(), mat(0x3a1050), { p: [0, -0.15, 0.37], r: [0, 0, Math.PI], s: [0.1, 0.06, 0.05] }));
+  for (const x of [-0.06, 0.06]) head.add(M(cone(4), mat(0xffffff), { p: [x, -0.18, 0.39], r: [Math.PI, 0, 0], s: [0.025, 0.06, 0.025] }));
+  for (const x of [-1, 1]) head.add(M(cone(10), mat(0x3a1a50, { roughness: 0.4 }), { p: [x * 0.27, 0.34, 0], r: [0, 0, x * -0.45], s: [0.08, 0.3, 0.08] }));
+  head.add(M(octa(), mat(0x7af0ff, { emissive: 0x3ad0ff, emissiveIntensity: 1.1, roughness: 0.1, flatShading: true }), { p: [0, 0.45, 0.05], s: [0.12, 0.24, 0.12] }));
+  for (const side of [-1, 1]) {
+    const w = G(side < 0 ? 'wingL' : 'wingR', [side * 0.3, 1.0, -0.3]);
+    rig.add(w);
+    w.add(M(batWingGeo(), mat(0x5a2a8a, { side: THREE.DoubleSide }), { s: [side * 0.45, 0.45, 0.45] }));
+  }
+  for (const side of [-1, 1]) {
+    const arm = G(side < 0 ? 'armL' : 'armR', [side * 0.45, 0.95, 0.05]);
+    rig.add(arm);
+    arm.add(M(capsule(), skin, { p: [side * 0.1, -0.15, 0], r: [0, 0, side * 0.6], s: [0.08, 0.13, 0.08] }));
+    arm.add(M(sphere(10), skin, { p: [side * 0.2, -0.3, 0.03], s: 0.08 }));
+  }
+  const orb = G('orb', [0.62, 1.3, 0.35]);
+  rig.add(orb);
+  orb.add(M(octa(), mat(0x7af0ff, { emissive: 0x3ad0ff, emissiveIntensity: 1.4, roughness: 0.1, flatShading: true }), { s: [0.14, 0.26, 0.14] }));
+  orb.add(M(sphere(10), mat(0x7af0ff, { emissive: 0x7af0ff, transparent: true, opacity: 0.18, depthWrite: false }), { s: 0.2 }));
+  return root;
+}
+function buildArcane() {
+  const root = G('root');
+  const rig = G('rig', [0, 0.1, 0]);
+  root.add(rig);
+  const body = G('body', [0, 0.9, 0]);
+  rig.add(body);
+  const stone = mat(0x7a86a8, { roughness: 0.85, flatShading: true });
+  const dark = mat(0x4a5470, { roughness: 0.9, flatShading: true });
+  const rune = glowMat(0x5af0ff, 1.7);
+  body.add(M(dodeca(), stone, { p: [0, 0.6, 0], s: [0.85, 0.8, 0.7] }));
+  body.add(M(geo('runeBand', () => new THREE.TorusGeometry(0.8, 0.035, 6, 40)), rune, { p: [0, 0.55, 0], r: [Math.PI / 2, 0, 0], s: [1, 0.85, 1] }));
+  body.add(M(geo('runeBand', () => new THREE.TorusGeometry(0.8, 0.035, 6, 40)), rune, { p: [0, 0.88, 0], r: [Math.PI / 2, 0, 0], s: [0.9, 0.78, 1] }));
+  body.add(M(starShape(), rune, { p: [0, 0.62, 0.62], s: 0.13 }));
+  for (const [x, y, z] of [[0.45, 1.2, 0.3], [-0.5, 1.15, 0.25], [0.3, 0.2, 0.5]]) body.add(M(ico(0), dark, { p: [x, y, z], s: 0.16 }));
+  const head = G('head', [0, 1.72, 0]);
+  body.add(head);
+  head.add(M(dodeca(), stone, { s: [0.42, 0.38, 0.4] }));
+  head.add(M(geo('visor', () => new THREE.BoxGeometry(1, 1, 1)), rune, { p: [0, 0.03, 0.33], s: [0.42, 0.07, 0.05] }));
+  head.add(M(octa(), rune, { p: [0, 0.45, 0], s: [0.1, 0.22, 0.1] }));
+  for (const side of [-1, 1]) {
+    const arm = G(side < 0 ? 'armL' : 'armR', [side * 0.95, 0.95, 0]);
+    body.add(arm);
+    arm.add(M(dodeca(), stone, { s: 0.32 }));
+    arm.add(M(geo('armRune', () => new THREE.TorusGeometry(0.22, 0.03, 6, 24)), rune, { p: [side * 0.08, -0.3, 0.08], r: [Math.PI / 2, 0, 0] }));
+    arm.add(M(dodeca(), stone, { p: [side * 0.08, -0.58, 0.08], s: 0.36 }));
+  }
+  for (const side of [-1, 1]) {
+    const leg = G(side < 0 ? 'legL' : 'legR', [side * 0.35, -0.35, 0.05]);
+    body.add(leg);
+    leg.add(M(dodeca(), stone, { p: [0, -0.25, 0], s: [0.3, 0.32, 0.32] }));
+    leg.add(M(dodeca(), dark, { p: [0, -0.55, 0.08], s: [0.32, 0.14, 0.38] }));
+  }
+  // Floating open spellbook
+  const orb = G('orb', [0, 1.25, 1.05]);
+  rig.add(orb);
+  const cover = mat(0x6a2a8a, { roughness: 0.6 });
+  for (const x of [-1, 1]) orb.add(M(geo('bookL', () => new THREE.BoxGeometry(1, 1, 1)), cover, { p: [x * 0.2, 0, 0], r: [0, 0, x * -0.25], s: [0.4, 0.05, 0.52] }));
+  for (const x of [-1, 1]) orb.add(M(geo('bookL', () => new THREE.BoxGeometry(1, 1, 1)), mat(0xfff6e0, { emissive: 0xfff2c8, emissiveIntensity: 0.5 }), { p: [x * 0.19, 0.04, 0], r: [0, 0, x * -0.22], s: [0.36, 0.03, 0.46] }));
+  orb.add(M(starShape(), glowMat(0x5af0ff, 2.2), { p: [0, 0.35, 0], s: 0.1 }));
+  return root;
+}
+
+function buildMage(variant) {
+  let root;
+  switch (variant) {
+    case 'sprite': root = buildSprite(); break;
+    case 'imp': root = buildImp(); break;
+    case 'arcane': root = buildArcane(); break;
+    case 'witch': root = robedMage({ robe: 0xe8572a, trim: 0xffc83a, skin: 0xffd4b0, hat: 'witch', hatColor: 0x3a1a4a, band: 0xff8a2a, orb: 0xff7a1a, iris: 0x2a7a2a, brow: 0x6a2a10 }); break;
+    case 'sage': root = robedMage({ robe: 0x3a8ae0, trim: 0xe6f6ff, skin: 0xffd8c0, hat: 'wizard', hatColor: 0x2a6ac0, band: 0xe6f6ff, orb: 0x9ae6ff, topper: 'crystal', beard: 0xffffff, iris: 0x2a5ab0, brow: 0xffffff }); break;
+    case 'storm': root = robedMage({ robe: 0x24307a, trim: 0xffd84a, skin: 0xffd4b0, hat: 'wizard', hatColor: 0x1a2260, band: 0xffd84a, orb: 0xfff066, beard: 0xc8c8d8, iris: 0x2a2a6a, brow: 0xc8c8d8, angry: true }); break;
+    case 'oracle': root = robedMage({ robe: 0x4a2a7a, trim: 0xb48cff, hat: 'hood', orb: 0xc08aff, orbit: 0xc08aff, eyes: 0xe0b0ff }); break;
+    case 'star': root = robedMage({ robe: 0xf6f2ff, trim: 0xf0b830, skin: 0xffe0c8, hat: 'none', orb: 0xffe066, topper: 'star', beard: 0xffffff, halo: true, cape: 0x6a3ad0, iris: 0x3a5ad0, brow: 0xffffff }); break;
+  }
+  const A = new Anim(root);
+  const has = (n) => !!A.rest[n];
+  const opt = (n, fn) => (has(n) ? fn() : null);
+  // Continuous wing flapping across a whole clip
+  const flap = (n, dur, per, a, b) => {
+    const times = [], vals = [];
+    for (let t = 0, i = 0; t <= dur + 1e-6; t += per / 2, i++) { times.push(Math.min(t, dur)); vals.push(i % 2 ? b : a); }
+    if (times[times.length - 1] < dur) { times.push(dur); vals.push(a); }
+    return A.R(n, times, vals);
+  };
+  // Idle (2.4 s): float, breathe, robe sway, look around, blink, hat flop, orb pulse
+  A.add('Idle', 2.4, [
+    A.P('rig', T(2.4, 5), [[0, 0, 0], [0, 0.1, 0], [0, 0, 0], [0, 0.1, 0], [0, 0, 0]]),
+    opt('body', () => A.S('body', T(2.4, 3), [1, [1.03, 0.98, 1.03], 1])),
+    opt('hem', () => A.R('hem', T(2.4, 5), [[0, 0, 0.04], [0.02, 0, 0], [0, 0, -0.04], [-0.02, 0, 0], [0, 0, 0.04]])),
+    opt('head', () => A.R('head', [0, 0.6, 1.2, 1.8, 2.4], [[0, 0, 0], [0.05, 0.3, 0.05], [0, 0, 0], [0.05, -0.3, -0.05], [0, 0, 0]])),
+    opt('lids', () => A.S('lids', [0, 1.5, 1.58, 1.66, 2.4], [1, 1, [1, 12, 1], 1, 1])),
+    opt('hatTip', () => A.R('hatTip', T(2.4, 3), [[0, 0, 0.08], [0, 0, -0.08], [0, 0, 0.08]])),
+    opt('hatTip1', () => A.R('hatTip1', T(2.4, 3), [[0, 0, 0.12], [0, 0, -0.12], [0, 0, 0.12]])),
+    opt('armR', () => A.R('armR', T(2.4, 3), [[0, 0, 0], [-0.12, 0, 0.04], [0, 0, 0]])),
+    opt('armL', () => A.R('armL', T(2.4, 3), [[0, 0, 0], [0.08, 0, -0.04], [0, 0, 0]])),
+    opt('orb', () => A.S('orb', T(1.2, 3).concat([2.4]), [1, 1.18, 1, 1])),
+    opt('orbit', () => A.R('orbit', T(2.4, 5), [[0, 0, 0], [0, 1.57, 0], [0, 3.14, 0], [0, 4.71, 0], [0, 6.28, 0]])),
+    opt('wingL', () => flap('wingL', 2.4, 0.3, [0, 0.6, 0], [0, -0.4, 0])),
+    opt('wingR', () => flap('wingR', 2.4, 0.3, [0, -0.6, 0], [0, 0.4, 0])),
+    opt('tail', () => A.R('tail', T(2.4, 3), [[0, 0.3, 0], [0, -0.3, 0], [0, 0.3, 0]])),
+    opt('cape', () => A.R('cape', T(2.4, 3), [[0.05, 0, 0], [-0.03, 0, 0], [0.05, 0, 0]])),
+  ]);
+  // Run: glide with lean, robe and cape fluttering back
+  A.add('Run', 0.7, [
+    A.P('rig', T(0.7, 3), [[0, 0, 0], [0, 0.16, 0], [0, 0, 0]]),
+    A.R('rig', [0, 0.7], [[0.22, 0, 0], [0.22, 0, 0]]),
+    opt('hem', () => A.R('hem', T(0.7, 3), [[-0.15, 0, 0.04], [-0.22, 0, -0.04], [-0.15, 0, 0.04]])),
+    opt('cape', () => A.R('cape', T(0.7, 3), [[-0.35, 0, 0], [-0.5, 0, 0], [-0.35, 0, 0]])),
+    opt('armL', () => A.R('armL', [0, 0.7], [[0.5, 0, 0], [0.5, 0, 0]])),
+    opt('hatTip', () => A.R('hatTip', [0, 0.7], [[0.3, 0, 0], [0.3, 0, 0]])),
+    opt('wingL', () => flap('wingL', 0.7, 0.2, [0, 0.7, 0], [0, -0.5, 0])),
+    opt('wingR', () => flap('wingR', 0.7, 0.2, [0, -0.7, 0], [0, 0.5, 0])),
+  ]);
+  // Cast (0.9 s): crouch, staff overhead with a full twirl, thrust, magic burst, recover
+  const c = [0, 0.22, 0.42, 0.55, 0.9];
+  A.add('Punch', 0.9, [
+    A.P('rig', c, [[0, 0, 0], [0, -0.08, -0.05], [0, 0.12, 0], [0, 0.05, 0.1], [0, 0, 0]]),
+    A.R('rig', c, [[0, 0, 0], [-0.15, 0, 0], [-0.1, 0, 0], [0.25, 0, 0], [0, 0, 0]]),
+    opt('armR', () => A.R('armR', c, [[0, 0, 0], [-1.0, 0, 0.3], [-2.7, 0, 0.2], [-1.25, 0, -0.1], [0, 0, 0]])),
+    opt('armL', () => A.R('armL', c, [[0, 0, 0], [0.3, 0, -0.2], [-0.8, 0, -0.5], [-1.4, 0, -0.2], [0, 0, 0]])),
+    opt('staff', () => A.R('staff', c, [[0, 0, 0], [0.8, 1.57, 0], [2.7, 3.14, 0], [1.4, 6.28, 0], [0, 6.28, 0]])),
+    opt('orb', () => A.S('orb', c, [1, 1.3, 1.7, 2.6, 1])),
+    opt('head', () => A.R('head', c, [[0, 0, 0], [0.15, 0, 0], [-0.2, 0, 0], [0.1, 0, 0], [0, 0, 0]])),
+    opt('hem', () => A.R('hem', c, [[0, 0, 0], [0.08, 0, 0], [-0.12, 0, 0], [-0.08, 0, 0], [0, 0, 0]])),
+    opt('lids', () => A.S('lids', c, [1, 1, 1, [1, 6, 1], 1])),
+  ]);
+  A.add('HitReact', 0.45, [
+    A.R('rig', T(0.45, 4), [[0, 0, 0], [-0.4, 0, 0.18], [0.1, 0, -0.05], [0, 0, 0]]),
+    A.P('rig', T(0.45, 3), [[0, 0, 0], [0, 0.05, -0.25], [0, 0, 0]]),
+    opt('head', () => A.R('head', T(0.45, 3), [[0, 0, 0], [-0.4, 0.2, 0], [0, 0, 0]])),
+    opt('hatTip', () => A.R('hatTip', T(0.45, 3), [[0, 0, 0], [0.6, 0, 0.3], [0, 0, 0]])),
+    opt('lids', () => A.S('lids', T(0.45, 3), [1, [1, 12, 1], 1])),
+  ]);
+  A.add('Death', 1.3, [
+    A.R('rig', [0, 0.25, 0.9, 1.3], [[0, 0, 0], [-0.3, 0, 0.2], [0, 7, 0.3], [0, 9, 0.4]]),
+    A.P('rig', [0, 0.25, 0.9, 1.3], [[0, 0, 0], [0, 0.2, -0.1], [0, 0.6, 0], [0, 0.2, 0]]),
+    A.S('rig', [0, 0.9, 1.3], [1, 0.85, 0.02]),
+    opt('lids', () => A.S('lids', [0, 0.2, 1.3], [1, [1, 12, 1], [1, 12, 1]])),
+    opt('hat', () => A.P('hat', [0, 0.3, 0.8], [[0, 0, 0], [0.2, 0.7, 0], [0.5, 1.2, -0.2]])),
+  ]);
+  A.add('Dance', 1.2, [
+    A.R('rig', T(1.2, 5), [[0, 0, 0], [0, 1.57, 0.08], [0, 3.14, 0], [0, 4.71, -0.08], [0, 6.28, 0]]),
+    A.P('rig', T(1.2, 5), [[0, 0, 0], [0, 0.35, 0], [0, 0, 0], [0, 0.35, 0], [0, 0, 0]]),
+    opt('armR', () => A.R('armR', T(1.2, 3), [[-2.7, 0, 0.2], [-2.3, 0, 0.4], [-2.7, 0, 0.2]])),
+    opt('armL', () => A.R('armL', T(1.2, 3), [[-2.0, 0, -0.4], [-2.6, 0, -0.2], [-2.0, 0, -0.4]])),
+    opt('orb', () => A.S('orb', T(0.6, 3).concat([1.2]), [1, 1.5, 1, 1])),
+    opt('hatTip', () => A.R('hatTip', T(0.6, 3).concat([1.2]), [[0, 0, 0.3], [0, 0, -0.3], [0, 0, 0.3], [0, 0, 0.3]])),
+  ]);
+  return { scene: root, animations: A.clips };
+}
+
 // ---------------------------------------------------------------- Public builder
 export function buildCreature(name) {
   const def = PROC[name];
@@ -579,6 +938,7 @@ export function buildCreature(name) {
     case 'bat': return buildBat(def.variant);
     case 'wisp': return buildWisp(def.variant);
     case 'pumpkin': return buildPumpkin();
+    case 'mage': return buildMage(def.variant);
   }
   throw new Error('No builder for ' + def.kind);
 }

@@ -8,7 +8,7 @@
 <script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
 <script>window.PLATFORM = "crazygames";</script>
 <script>window.PLATFORM = window.PLATFORM || 'local';</script>
-<link rel="stylesheet" href="css/style.css?v=20261117171009">
+<link rel="stylesheet" href="css/style.css?v=20261118084653">
 </head>
 <body>
 <canvas id="game"></canvas>
@@ -47,6 +47,10 @@
 <!-- Bottom controls -->
 <div id="bottom" class="hidden">
   <button id="freeBtn" class="free-btn hidden"><span style="font-size:30px"><i data-ico="gift"></i></span>FREE<br>MONSTER<span class="ad-tag" style="margin:2px 0 0">AD</span></button>
+  <button id="buyMage" class="buy-btn mage hidden">
+    <span class="buy-ico"><i data-ico="wand"></i></span><span class="buy-name">MAGE</span>
+    <span class="buy-price"><span class="coin-icon"></span><span id="priceMage">6</span></span>
+  </button>
   <div class="bottom-row">
     <button id="buyMelee" class="buy-btn melee">
       <span class="buy-ico"><i data-ico="sword"></i></span><span class="buy-name">BRAWLER</span>
@@ -129,8 +133,13 @@
   <div class="panel wide">
     <div class="ribbon purple">MONSTER BOOK</div>
     <div class="book-progress" id="bookProgress"></div>
-    <div class="book-line"><h3><i data-ico="sword"></i> Brawlers</h3><div class="book-grid" id="bookMelee"></div></div>
-    <div class="book-line"><h3><i data-ico="wing"></i> Flyers</h3><div class="book-grid" id="bookRanged"></div></div>
+    <div class="book-tabs"><button id="tabMine" class="on">YOUR MONSTERS <span id="countMine"></span></button><button id="tabBest">BESTIARY <span id="countBest"></span></button></div>
+    <div id="bookMine">
+      <div class="book-line"><h3><i data-ico="sword"></i> Brawlers</h3><div class="book-grid" id="bookMelee"></div></div>
+      <div class="book-line"><h3><i data-ico="wing"></i> Flyers</h3><div class="book-grid" id="bookRanged"></div></div>
+      <div class="book-line"><h3><i data-ico="wand"></i> Mages</h3><div class="book-grid" id="bookMage"></div></div>
+    </div>
+    <div id="bookBest" class="hidden"></div>
     <button id="bookClose" class="btn blue">CLOSE</button>
   </div>
 </div>
@@ -206,6 +215,6 @@
 <script type="importmap">
 { "imports": { "three": "./lib/three/three.module.js", "three/addons/": "./lib/three/addons/" } }
 </script>
-<script type="module" src="js/main.js?v=20261117171009"></script>
+<script type="module" src="js/main.js?v=20261118084653"></script>
 </body>
 </html>
