@@ -5,18 +5,18 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { platform, hooks, detectLanguage } from './platform.js?v=20261118124608';
-import { AudioManager } from './audio.js?v=20261118124608';
+import { platform, hooks, detectLanguage } from './platform.js?v=20261118130501';
+import { AudioManager } from './audio.js?v=20261118130501';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
   buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
   ELEMENTS, ARENAS, arenaIndex, arenaTwist, unitValue, coinUnits, enemyBudget, mercy,
   LINE_KEYS, MAGE_UNLOCK, TIER_TITLES, TIER_ACCESSORY, TIER_UNLOCK, tierCap, ENEMIES, BOSSES,
   ELEMENT_KEYS, HELL_FROM, FINAL_LEVEL, GUARD_MODEL, ETERNUS, FINAL_RATIO,
-} from './data.js?v=20261118124608';
-import { isProc, procFlying, procBig, buildCreature, PROC } from './creatures.js?v=20261118124608';
-import { icon, applyIcons } from './icons.js?v=20261118124608';
-import { THEMES, themeIndex, VOID_THEME, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261118124608';
+} from './data.js?v=20261118130501';
+import { isProc, procFlying, procBig, buildCreature, PROC } from './creatures.js?v=20261118130501';
+import { icon, applyIcons } from './icons.js?v=20261118130501';
+import { THEMES, themeIndex, VOID_THEME, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261118130501';
 
 // ============================================================ Helpers
 const $ = (id) => document.getElementById(id);
@@ -749,7 +749,7 @@ class Unit {
   async init() {
     const t = await loadModel(monsterPath(this.model));
     const obj = cloneSkinned(t.scene);
-    const height = Math.min(this.final ? 5.6 : 4.2, this.height * (this.model.startsWith('Big_') || procBig(this.model) ? 1.3 : 1));
+    const height = Math.min(this.final ? 5.6 : this.isBoss ? 4.2 : 3.7, this.height * (this.model.startsWith('Big_') || procBig(this.model) ? 1.3 : 1));
     this.height = height;
     const s = height / Math.max(t.size.y, t.size.x * 0.72);
     obj.scale.setScalar(s);

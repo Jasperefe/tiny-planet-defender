@@ -109,7 +109,7 @@ export function unitStats(type, tier) {
 // Visual height of a unit by tier (world units, a board tile is 2 wide)
 export function unitHeight(type, tier) {
   // Grows up to level 10, then only a little so giants still fit on a square
-  const t = Math.min(tier, 8) - 1 + Math.max(0, tier - 8) * 0.3;
+  const t = Math.min(tier, 8) - 1 + Math.min(2, Math.max(0, tier - 8)) * 0.1; // levels 11-15 don't grow any more
   return (type === 'melee' ? 1.9 : type === 'mage' ? 1.75 : 1.65) + 0.18 * t;
 }
 
