@@ -182,14 +182,28 @@ export function coinUnits(coins, buys) {
 
 // Enemy army size: it grows with YOUR army, so maxing out never makes it easy.
 // Level 1 is a fair fight, from level 3 the enemy is a little stronger than you.
-export function enemyBudget(level, armyUnits, spareCoinUnits) {
+// Final boss mode (Playgama build): hell from level 100, Voidlord Eternus at level 150.
+export const HELL_FROM = 100;
+export const FINAL_LEVEL = 150;
+export const FINAL_K = 0.8; // sizes the Royal Guard and Eternus before the fight
+// At FIGHT, Eternus and his guard are scaled to this multiple of YOUR army power, so the odds
+// (about 1 win in 10 tries) are the same whatever monsters you bring.
+export const FINAL_RATIO = 0.63;
+export const hellK = (level) => Math.min(1.42, 1.3 + (level - HELL_FROM) * 0.0025);
+export function enemyBudget(level, armyUnits, spareCoinUnits, hell = false) {
   const curve = expected[Math.min(level + 1, 1001)];
-  const k = [0, 0.8, 0.95, 1.0, 1.04][level] || Math.min(1.26, 1.06 + level * 0.004);
+  let k = [0, 0.8, 0.95, 1.0, 1.04][level] || Math.min(1.26, 1.06 + level * 0.004);
+  if (hell && level >= HELL_FROM) k = level === FINAL_LEVEL ? (globalThis.__finalK ?? FINAL_K) : hellK(level);
   const potential = armyUnits + spareCoinUnits * 0.75;
   return Math.max(2, Math.round(Math.max(curve * (level <= 3 ? 0.55 : 0.8), potential * k)));
 }
 // After each lost try the same enemy gets a bit weaker, so every level is passable
-export const mercy = (losses) => Math.pow(0.92, Math.min(losses, 8));
+// Hell mode: retries help much less (5%); Eternus only gets 1% weaker per try
+export const mercy = (losses, level = 1, hell = false) => {
+  if (hell && level === FINAL_LEVEL) return Math.pow(0.99, Math.min(losses, 40));
+  if (hell && level >= HELL_FROM) return Math.pow(0.95, Math.min(losses, 16)); // slow, but never a wall
+  return Math.pow(0.92, Math.min(losses, 8));
+};
 
 // Seeded random so a level always has the same army
 function rng(seed) {
@@ -201,14 +215,16 @@ function rng(seed) {
 }
 
 // Build an enemy army: up to 15 units on a 5x3 grid.
-export function buildLevel(level, budgetIn) {
+export function buildLevel(level, budgetIn, opts = {}) {
+  if (opts.final && level === FINAL_LEVEL) return buildFinal(budgetIn);
+  const hell = opts.final && level >= HELL_FROM;
   const r = rng(level * 7 + 3);
   const isBoss = level % 10 === 0;
   const arena = ARENAS[arenaIndex(level)];
   const cycle = Math.floor((level - 1) / (10 * ARENAS.length));
   const inArena = (level - 1) % 10;
   // Share of enemies with an element (none in the first 3 levels)
-  const elemShare = level <= 3 ? 0 : Math.min(0.8, 0.25 + inArena * 0.06 + cycle * 0.2);
+  const elemShare = hell ? 1 : level <= 3 ? 0 : Math.min(0.8, 0.25 + inArena * 0.06 + cycle * 0.2);
   // Elemental enemies are stronger, so the raw budget is trimmed a little
   let budget = Math.max(2, Math.round((budgetIn || 2) / (1 + 0.06 * elemShare)));
   const units = [];
@@ -269,7 +285,20 @@ export function buildLevel(level, budgetIn) {
   }
   // From level 15 the enemy's total power is sometimes a mystery, from 30 always
   const hidePower = level >= 30 || (level >= 15 && r() < 0.5);
-  return { level, units, boss, hidePower };
+  if (hell) for (const u of units) u.hidden = r() < 0.75;
+  return { level, units, boss, hidePower, hell };
+}
+
+// Level 150: Voidlord Eternus and his Royal Guard of 4 Void Knights
+export const ETERNUS = { model: 'P_Eternus', name: 'VOIDLORD ETERNUS', final: true };
+export const GUARD_MODEL = 'P_VoidKnight';
+function buildFinal(budgetIn) {
+  const budget = Math.max(8, Math.round(budgetIn || 8));
+  const bossBudget = Math.round(budget * 0.72);
+  const each = (budget - bossBudget) / 4;
+  const tier = Math.max(1, Math.min(MAX_TIER, Math.round(Math.log2(Math.max(1, each))) + 1));
+  const units = [0, 1, 3, 4].map((col, i) => ({ type: 'melee', tier, seed: i, model: GUARD_MODEL, element: 'shadow', guard: true, hidden: true, row: 0, col }));
+  return { level: FINAL_LEVEL, units, boss: { ...ETERNUS, element: null, budget: bossBudget }, hidePower: true, hell: true, final: true };
 }
 
 // Boss stats from its budget (in tier-1 melee units)

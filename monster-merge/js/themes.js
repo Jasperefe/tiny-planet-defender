@@ -2,7 +2,7 @@
 // The arena changes every 10 levels and cycles after the last theme.
 
 import * as THREE from 'three';
-import { buildPumpkinHead, snowmanProp } from './creatures.js?v=20261118084653';
+import { buildPumpkinHead, snowmanProp } from './creatures.js?v=20261118124608';
 
 const TAU = Math.PI * 2;
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -118,7 +118,25 @@ export const THEMES = [
   },
 ];
 
-export const themeIndex = (level) => Math.floor((level - 1) / 10) % THEMES.length;
+// The Void Throne: only for the final boss at level 150 (not part of the arena cycle)
+export const VOID_THEME = THEMES.length;
+THEMES.push({
+  id: 'void', name: 'THE VOID THRONE',
+  sky: [0x05010f, 0x2a0a52, 0x8a3ab0], stars: 1, moon: 0xff8af0, fog: 0x2a1050,
+  hemi: [0xe8dcff, 0x5a3a8a, 2.0], sun: [0xfff0f8, 2.8], exposure: 1.18,
+  cloud: 0x6a4a9a,
+  recolor: { Green_Light: 0x7a6aa8, Dirt_1: 0x4a3a6a, Rock: 0x4a3c6a, Green: 0x6a4a9a, Leaves_Pine: 0x7a5aa8 },
+  particles: 'sparkles',
+  decor: [
+    ['@throne', 3.0, 0, -10.4, 0],
+    ['@voidspike', 4.2, -6.6, -8.8], ['@voidspike', 3.6, 6.5, -8.6], ['@voidspike', 3.2, -6.9, -4.6], ['@voidspike', 3.4, 6.9, -4.8],
+    ['@voidspike', 2.4, -6.8, 7.0], ['@voidspike', 2.6, 6.8, 7.4],
+    ['@crystal', 1.4, -6.3, 1.6], ['@crystal', 1.2, 6.4, 4.4], ['@crystal', 1.2, -6.2, -1.4], ['@crystal', 1.1, 6.3, -2.2],
+    ['@skull', 0.8, -6.1, 4.6, 0.5], ['@skull', 0.7, 6.2, 1.0, -0.6], ['@bones', 0.5, -5.9, -6.4],
+    ['@orb', 1, -10, -16], ['@orb', 1.4, 12, -22], ['@orb', 0.8, -15, 3],
+  ],
+});
+export const themeIndex = (level) => Math.floor((level - 1) / 10) % 6;
 
 // ---------------------------------------------------------------- Procedural props
 const cache = new Map();
@@ -281,7 +299,42 @@ function orb(h) {
   return g;
 }
 
+function voidSpike(h) {
+  const g = new THREE.Group();
+  const dark = g1('vsDark', () => std(0x241a3a, { roughness: 0.35, flatShading: true }));
+  const glowM = g1('vsGlow', () => std(0xc35cff, { emissive: 0xb04cff, emissiveIntensity: 1.6, roughness: 0.2, flatShading: true }));
+  const c = g1('vsCone', () => new THREE.ConeGeometry(1, 1, 5));
+  for (const [x, z, hh, s, tz, gl] of [[0, 0, 1, 0.16, 0, 0], [0.18, 0.06, 0.62, 0.1, -0.4, 1], [-0.16, 0.08, 0.5, 0.09, 0.45, 0], [0.05, -0.16, 0.42, 0.08, 0.2, 1]]) {
+    g.add(mesh(c, gl ? glowM : dark, [x, hh / 2, z], [s, hh, s], [0, 0, tz]));
+  }
+  g.scale.setScalar(h);
+  return g;
+}
+function throne(h) {
+  const g = new THREE.Group();
+  const dark = g1('thDark', () => std(0x2a2040, { roughness: 0.4, flatShading: true }));
+  const gold = g1('thGold', () => std(0xf2b640, { roughness: 0.3, metalness: 0.7 }));
+  const glowM = g1('thGlow', () => std(0xff6ad8, { emissive: 0xff2ad0, emissiveIntensity: 2.2 }));
+  const spike = g1('vsGlow', () => std(0xc35cff, { emissive: 0xb04cff, emissiveIntensity: 1.6, roughness: 0.2, flatShading: true }));
+  const box = g1('box1', () => new THREE.BoxGeometry(1, 1, 1));
+  const c = g1('vsCone', () => new THREE.ConeGeometry(1, 1, 5));
+  g.add(mesh(box, dark, [0, 0.12, 0.3], [1.8, 0.24, 1.2]));
+  g.add(mesh(box, gold, [0, 0.3, 0.35], [1.5, 0.12, 1.0]));
+  g.add(mesh(box, dark, [0, 1.35, -0.25], [1.6, 2.6, 0.3]));
+  for (const x of [-1, 1]) {
+    g.add(mesh(box, dark, [x * 0.85, 0.55, 0.3], [0.26, 0.8, 1.0]));
+    g.add(mesh(box, gold, [x * 0.85, 0.98, 0.3], [0.32, 0.08, 1.05]));
+    for (let k = 0; k < 3; k++) g.add(mesh(c, k ? spike : dark, [x * (0.55 + k * 0.2), 2.9 - k * 0.3, -0.25], [0.14 - k * 0.025, 1.3 - k * 0.3, 0.14], [0, 0, -x * (0.08 + k * 0.18)]));
+  }
+  g.add(mesh(c, dark, [0, 3.4, -0.25], [0.2, 1.6, 0.2]));
+  g.add(mesh(g1('octaG', () => new THREE.OctahedronGeometry(1, 0)), glowM, [0, 2.2, -0.05], [0.22, 0.32, 0.12]));
+  g.add(mesh(g1('thRing', () => new THREE.TorusGeometry(0.55, 0.035, 8, 40)), gold, [0, 2.2, -0.08]));
+  g.scale.setScalar(h);
+  return g;
+}
+
 const PROPS = {
+  '@voidspike': voidSpike, '@throne': throne,
   '@cactus': cactus, '@ice': iceSpikes, '@crystal': crystal, '@grave': (h) => grave(h, false), '@cross': (h) => grave(h, true),
   '@lantern': lantern, '@pumpkin': pumpkin, '@lava': lavaPool, '@volcano': volcano, '@skull': skull, '@bones': bones,
   '@pyramid': pyramid, '@orb': orb,

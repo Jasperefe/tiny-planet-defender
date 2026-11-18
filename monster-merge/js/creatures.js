@@ -3,6 +3,7 @@
 // as the glTF monsters. Every creature faces +Z and stands on y = 0.
 
 import * as THREE from 'three';
+import { buildEternus, buildVoidKnight } from './eternus.js?v=20261118124608';
 
 const TAU = Math.PI * 2;
 
@@ -34,6 +35,9 @@ export const PROC = {
   P_Mage_Oracle: { kind: 'mage', variant: 'oracle' },
   P_Mage_Arcane: { kind: 'mage', variant: 'arcane' },
   P_Mage_Star: { kind: 'mage', variant: 'star' },
+  // Final boss (level 150) and his Royal Guard
+  P_Eternus: { kind: 'eternus', variant: 'void', big: true },
+  P_VoidKnight: { kind: 'voidknight', variant: 'void' },
 };
 export const isProc = (name) => name in PROC;
 export const procFlying = (name) => !!(PROC[name] && PROC[name].flying);
@@ -939,6 +943,8 @@ export function buildCreature(name) {
     case 'wisp': return buildWisp(def.variant);
     case 'pumpkin': return buildPumpkin();
     case 'mage': return buildMage(def.variant);
+    case 'eternus': return buildEternus();
+    case 'voidknight': return buildVoidKnight();
   }
   throw new Error('No builder for ' + def.kind);
 }

@@ -5,17 +5,18 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { platform, hooks, detectLanguage } from './platform.js?v=20261118084653';
-import { AudioManager } from './audio.js?v=20261118084653';
+import { platform, hooks, detectLanguage } from './platform.js?v=20261118124608';
+import { AudioManager } from './audio.js?v=20261118124608';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
   buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
   ELEMENTS, ARENAS, arenaIndex, arenaTwist, unitValue, coinUnits, enemyBudget, mercy,
   LINE_KEYS, MAGE_UNLOCK, TIER_TITLES, TIER_ACCESSORY, TIER_UNLOCK, tierCap, ENEMIES, BOSSES,
-} from './data.js?v=20261118084653';
-import { isProc, procFlying, procBig, buildCreature, PROC } from './creatures.js?v=20261118084653';
-import { icon, applyIcons } from './icons.js?v=20261118084653';
-import { THEMES, themeIndex, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261118084653';
+  ELEMENT_KEYS, HELL_FROM, FINAL_LEVEL, GUARD_MODEL, ETERNUS, FINAL_RATIO,
+} from './data.js?v=20261118124608';
+import { isProc, procFlying, procBig, buildCreature, PROC } from './creatures.js?v=20261118124608';
+import { icon, applyIcons } from './icons.js?v=20261118124608';
+import { THEMES, themeIndex, VOID_THEME, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261118124608';
 
 // ============================================================ Helpers
 const $ = (id) => document.getElementById(id);
@@ -84,6 +85,7 @@ const save = {
   sfx: true, music: true, lastDaily: '', streak: 0, levelsSinceAd: 0, freeUsedLevel: 0,
   foe: null, // { level, budget, losses } the enemy army stays the same on retries
   guideSeen: false, elemSeen: {},
+  hellSeen: false, legend: false, // final boss mode (Playgama)
 };
 let state = 'loading'; // loading | prep | battle | result | chest
 let paused = false;
@@ -94,6 +96,10 @@ let shake = 0;
 let battleTime = 0;
 let currentLevel = null;
 let hintShown = false;
+// Final boss mode (Playgama only for now): hell from level 100, Voidlord Eternus at 150
+const FINAL = !!platform.finalBoss;
+const isFinalLevel = (l) => FINAL && l === FINAL_LEVEL;
+const tIdx = (l) => (isFinalLevel(l) ? VOID_THEME : themeIndex(l));
 
 // ============================================================ Renderer
 const canvas = $('game');
@@ -213,7 +219,7 @@ function loadModel(path) {
         o.castShadow = true;
         o.receiveShadow = true;
         if (o.material) {
-          o.material.side = THREE.FrontSide;
+          if (!o.material.userData.keepSide) o.material.side = THREE.FrontSide;
           // Color-palette atlases must not be mip-mapped, or neighboring swatches bleed together
           const map = o.material.map;
           if (map && path.includes('/monsters/')) {
@@ -743,7 +749,7 @@ class Unit {
   async init() {
     const t = await loadModel(monsterPath(this.model));
     const obj = cloneSkinned(t.scene);
-    const height = Math.min(4.2, this.height * (this.model.startsWith('Big_') || procBig(this.model) ? 1.3 : 1));
+    const height = Math.min(this.final ? 5.6 : 4.2, this.height * (this.model.startsWith('Big_') || procBig(this.model) ? 1.3 : 1));
     this.height = height;
     const s = height / Math.max(t.size.y, t.size.x * 0.72);
     obj.scale.setScalar(s);
@@ -876,11 +882,12 @@ async function createUnit(opts) {
     case 'fire': powerMul = 1.22; break;
     case 'poison': powerMul = 1.2; break;
   }
-  const height = opts.isBoss ? 4.4 : unitHeight(opts.type, opts.tier);
+  if (opts.final) { stats.splash = 3.4; stats.range = 3.0; }
+  const height = opts.isBoss ? (opts.final ? 4.3 : 4.4) : unitHeight(opts.type, opts.tier);
   const u = new Unit({ ...opts, model, aura, flying, stats, height, maxHp: stats.hp, hp: stats.hp, powerMul, dots: [], slow: 0 });
   await u.init();
   u.home = cellPos(u.team, u.row, u.col);
-  if (u.isBoss) u.home = new THREE.Vector3(0, 0, -4);
+  if (u.isBoss) u.home = new THREE.Vector3(0, 0, u.final ? -5.4 : -4);
   u.group.position.copy(u.home);
   u.group.rotation.y = isPlayer && state === 'battle' ? Math.PI : 0;
   scene.add(u.group);
@@ -892,7 +899,10 @@ function removeUnit(u) {
   scene.remove(u.group);
   const i = units.indexOf(u);
   if (i >= 0) units.splice(i, 1);
-  u.mixer && u.mixer.stopAllAction();
+  if (u.mixer) { u.mixer.stopAllAction(); u.mixer.uncacheRoot(u.mixer.getRoot()); }
+  // Free the per-unit materials (geometry and textures are shared with the template)
+  for (const m of u.mats || []) m.dispose();
+  for (const o of [u.hpBar, u.auraRing, u.elemRing, u.badge]) if (o) o.traverse((c) => { if (c.material) c.material.dispose(); });
 }
 
 const playerUnits = () => units.filter((u) => u.team === 'player');
@@ -957,12 +967,15 @@ function preloadPlayerTiers() {
 function foeBudget() {
   if (!save.foe || save.foe.level !== save.level) {
     const army = save.board.reduce((n, b) => n + unitValue(b.tier), 0);
-    save.foe = { level: save.level, budget: enemyBudget(save.level, army, coinUnits(save.coins, save.buys)), losses: 0 };
+    save.foe = { level: save.level, budget: enemyBudget(save.level, army, coinUnits(save.coins, save.buys), FINAL), losses: 0 };
   }
-  return Math.max(2, Math.round(save.foe.budget * mercy(save.foe.losses)));
+  return Math.max(2, Math.round(save.foe.budget * mercy(save.foe.losses, save.level, FINAL)));
 }
-function currentArmy() { return buildLevel(save.level, foeBudget()); }
+function currentArmy() { return buildLevel(save.level, foeBudget(), { final: FINAL }); }
+// Models the final fight summons mid-battle are loaded up front
+function preloadFinal() { for (const m of ['P_Slime_Shadow', 'P_Bat_Eye']) loadModel(monsterPath(m)); }
 
+const bossOpts = (b) => ({ team: 'enemy', type: 'melee', tier: 1, row: 1, col: 2, isBoss: true, model: b.model, flying: b.flying, budget: b.budget, element: b.element, final: !!b.final });
 async function setupLevel() {
   state = 'loading-level';
   // Clear enemies
@@ -971,7 +984,7 @@ async function setupLevel() {
   const L = currentArmy();
   currentLevel = L;
   // New arena every 10 levels
-  const ti = themeIndex(save.level);
+  const ti = tIdx(save.level);
   const newArena = ti !== themeNow;
   if (newArena) {
     const fl = $('flash');
@@ -979,9 +992,10 @@ async function setupLevel() {
     await new Promise((r) => setTimeout(r, 180));
     await applyTheme(ti);
   }
-  const jobs = L.units.map((e) => createUnit({ team: 'enemy', type: e.type, tier: e.tier, row: e.row, col: e.col, seed: e.seed, model: e.model, element: e.element, hidden: e.hidden }));
+  if (L.final) preloadFinal();
+  const jobs = L.units.map((e) => createUnit({ team: 'enemy', ...e }));
   let boss = null;
-  if (L.boss) jobs.push(createUnit({ team: 'enemy', type: 'melee', tier: 1, row: 1, col: 2, isBoss: true, model: L.boss.model, flying: L.boss.flying, budget: L.boss.budget, element: L.boss.element }).then((b) => { boss = b; b.bossName = L.boss.name; }));
+  if (L.boss) jobs.push(createUnit(bossOpts(L.boss)).then((b) => { boss = b; b.bossName = L.boss.name; }));
   const created = await Promise.all(jobs);
   for (const u of created) { if (u && !u.isBoss) popIn(u, 0.01); }
   updateLevelUI();
@@ -1089,10 +1103,12 @@ let elemCardDone = null;
 
 // Big title card for a new arena, with its twist
 async function arenaIntro() {
-  const th = THEMES[themeIndex(save.level)];
+  const th = THEMES[tIdx(save.level)];
   const el = $('arenaIntro');
   $('arenaName').textContent = th.name;
-  $('arenaTwist').textContent = save.level <= 3 ? 'Every fight is tough. Merge smart to survive!' : arenaTwist(save.level);
+  el.querySelector('small').textContent = isFinalLevel(save.level) ? 'FINAL BATTLE' : 'NEW ARENA';
+  $('arenaTwist').textContent = isFinalLevel(save.level) ? 'The Last Monarch and his Royal Guard await. No mercy. No skips.'
+    : save.level <= 3 ? 'Every fight is tough. Merge smart to survive!' : arenaTwist(save.level);
   el.classList.remove('hidden');
   el.style.animation = 'none'; void el.offsetWidth; el.style.animation = '';
   audio.play('bell', { volume: 0.7, vary: 0 });
@@ -1105,6 +1121,7 @@ async function arenaIntro() {
 }
 
 async function bossIntro(boss) {
+  if (boss.final) return eternusIntro(boss);
   audio.play('bell', { volume: 0.9, vary: 0 });
   camZoom = { pos: new THREE.Vector3(0, 6, 4), look: new THREE.Vector3(0, 2, -4), k: 0 };
   tween(0.6, (k) => { if (camZoom) camZoom.k = easeOutCubic(k); });
@@ -1120,6 +1137,29 @@ async function bossIntro(boss) {
   setTimeout(() => el.classList.add('hidden'), 700);
 }
 
+async function eternusIntro(boss) {
+  audio.play('slam', { volume: 1, vary: 0 });
+  audio.play('bell', { volume: 0.9, vary: 0, rate: 0.7 });
+  camZoom = { pos: new THREE.Vector3(0, 4.2, 3.2), look: new THREE.Vector3(0, 3.2, -5.4), k: 0 };
+  tween(1.0, (k) => { if (camZoom) camZoom.k = easeOutCubic(k); });
+  const y0 = -5;
+  boss.group.position.y = y0;
+  tween(1.6, (k) => { boss.group.position.y = y0 * (1 - easeOutCubic(k)); }, () => { boss.group.position.y = 0; });
+  shake = 1.2;
+  for (let i = 0; i < 4; i++) setTimeout(() => { groundRing(boss.group.position, C.purple, 4 + i * 1.5, 0.6); smoke(boss.group.position, 10, C.shadow, 2); }, i * 300);
+  await wait(1.4);
+  if (boss.actions.win) boss.play('win', 0.2);
+  const el = $('bossName');
+  el.innerHTML = '<small>FINAL BOSS</small>VOIDLORD ETERNUS';
+  el.classList.add('final');
+  el.classList.remove('hidden');
+  el.style.animation = 'none'; void el.offsetWidth; el.style.animation = '';
+  await wait(2.6);
+  boss.play('idle', 0.3);
+  tween(0.8, (k) => { if (camZoom) camZoom.k = 1 - easeOutCubic(k); }, () => { camZoom = null; });
+  setTimeout(() => { el.classList.add('hidden'); el.classList.remove('final'); el.textContent = ''; }, 900);
+}
+
 function maybeHint() {
   const hint = $('hint');
   if (save.level === 1 && !hintShown) {
@@ -1133,12 +1173,13 @@ function maybeHint() {
 
 function updateLevelUI() {
   $('levelNum').textContent = save.level;
+  $('legendTag').classList.toggle('hidden', !save.legend);
   const road = $('road');
   road.innerHTML = '';
   const start = Math.floor((save.level - 1) / 10) * 10 + 1;
   for (let l = start; l < start + 10; l++) {
     const i = document.createElement('i');
-    if (l % 10 === 0) { i.className = 'boss'; i.innerHTML = icon('skull'); }
+    if (l % 10 === 0) { i.className = isFinalLevel(l) ? 'boss final' : 'boss'; i.innerHTML = icon('skull'); }
     else if (l % 5 === 0) i.className = 'chest';
     if (l < save.level) i.classList.add('done');
     if (l === save.level) i.classList.add('now');
@@ -1394,9 +1435,24 @@ function sellUnit(u) {
 }
 
 // ============================================================ Battle
+// Final boss: scale Eternus and his guard to your army's power when the fight starts
+function scaleFinalFoes() {
+  const foes = enemyUnits();
+  const mine = armyPower(playerUnits()), theirs = armyPower(foes);
+  if (!mine || !theirs) return;
+  const want = mine * (globalThis.__finalR ?? FINAL_RATIO) * mercy(save.foe ? save.foe.losses : 0, FINAL_LEVEL, true);
+  const f = want / theirs;
+  for (const u of foes) {
+    u.stats = { ...u.stats, hp: Math.max(1, Math.round(u.stats.hp * f)), dmg: Math.max(1, Math.round(u.stats.dmg * f)) };
+    u.maxHp = u.stats.hp; u.hp = u.maxHp;
+  }
+  finalScale = f;
+}
+let finalScale = 1;
 function startBattle() {
   if (state !== 'prep') return;
   if (!playerUnits().length) { showBanner('BUY A MONSTER!', 'red'); return; }
+  if (currentLevel && currentLevel.final) scaleFinalFoes();
   state = 'battle';
   battleTime = 0;
   hintShown = true;
@@ -1432,6 +1488,8 @@ function dealDamage(attacker, target, base, isSplash = false) {
   const crit = !isSplash && Math.random() < 0.12;
   let dmg = Math.round(base * (crit ? 2 : 1) * rand(0.9, 1.1));
   if (target.element === 'ice') dmg = Math.round(dmg * 0.86); // icy armor
+  if (target.guard) dmg = Math.round(dmg * 0.7); // Void Knight shields
+  if (target.shield > 0) { hitShield(attacker, target, dmg); return; }
   target.setHp(target.hp - dmg);
   applyElement(attacker, target, base, dmg);
   target.flash = 1;
@@ -1474,6 +1532,7 @@ function applyElement(attacker, target, base, dmg) {
 }
 // Burn and poison tick every half second
 function updateDots(u, dt) {
+  if (u.shield > 0) { u.dots.length = 0; return; } // the void shield blocks burn and poison
   for (let i = u.dots.length - 1; i >= 0; i--) {
     const d = u.dots[i];
     d.t -= dt; d.acc += dt;
@@ -1494,7 +1553,7 @@ function killUnit(u) {
   u.alive = false;
   if (u.team === 'enemy') {
     if (!save.defeated) save.defeated = {};
-    save.defeated[u.isBoss ? 'boss:' + u.bossName : u.model] = 1;
+    if (!u.devoured) save.defeated[u.isBoss ? 'boss:' + u.bossName : u.model] = 1;
   }
   u.hpBar.visible = false;
   u.play('death', 0.1);
@@ -1508,7 +1567,8 @@ function killUnit(u) {
     tween(0.25, (k) => u.group.scale.setScalar(sx * (1 - k)), () => { if (u.team === 'enemy') removeUnit(u); else u.group.visible = false; });
     if (u.team === 'enemy') flyCoins(p.clone().setY(1), u.isBoss ? 12 : Math.min(5, 1 + Math.floor(u.tier / 2)));
   });
-  if (u.isBoss) { slowMo(1.2); shake = 1; audio.play('slam', { volume: 1 }); }
+  if (u.isBoss) { slowMo(u.final ? 2.4 : 1.2); shake = u.final ? 1.6 : 1; audio.play('slam', { volume: 1 }); }
+  if (u.shieldMesh) { u.group.remove(u.shieldMesh); u.shieldMesh = null; u.shield = 0; }
 }
 
 function slowMo(seconds) {
@@ -1518,6 +1578,7 @@ function slowMo(seconds) {
 
 // Projectiles for flyers
 const projectiles = [];
+function dropShot(p) { scene.remove(p.mesh); p.mesh.material.dispose(); }
 const orbGeo = new THREE.SphereGeometry(0.22, 12, 8);
 function shoot(from, to, dmg, team, tier, splash, opts = {}) {
   const color = opts.color || (team === 'player' ? new THREE.Color(0.6, 1.8, 2.6) : new THREE.Color(2.6, 0.8, 1.6));
@@ -1536,7 +1597,7 @@ function updateProjectiles(dt) {
     const d = tmp.distanceTo(p.mesh.position);
     if (!target.alive && d > 0.5) { // target died: fizzle
       burst(p.mesh.position, p.color, 4, 2, 0.3, 0.25, 1);
-      scene.remove(p.mesh); projectiles.splice(i, 1); continue;
+      dropShot(p); projectiles.splice(i, 1); continue;
     }
     if (d < 0.4) {
       dealDamage(p.from, target, p.dmg);
@@ -1549,7 +1610,7 @@ function updateProjectiles(dt) {
         groundRing(target.group.position, p.color, p.splash * 1.2, 0.35);
       }
       audio.play('orb_hit', { volume: 0.4, gap: 0.05 });
-      scene.remove(p.mesh); projectiles.splice(i, 1); continue;
+      dropShot(p); projectiles.splice(i, 1); continue;
     }
     p.mesh.position.addScaledVector(tmp.sub(p.mesh.position).normalize(), Math.min(d, p.speed * dt));
     glow.spawn(p.mesh.position, tmp2.set(0, 0, 0), p.color, 0.45, 0.25);
@@ -1611,10 +1672,155 @@ function mageRelease(u) {
   }
 }
 
+// ============================================================ Final boss: Voidlord Eternus (level 150)
+// Phase 1 THE KING: element changes every 8 s. Phase 2 THE SUMMONER (66% HP): 6 minions + a void shield
+// that only Mage spells break quickly. Phase 3 THE DEVOURER (33% HP): faster, shadow life-steal, and every
+// 10 s he takes your strongest monster (up to 3 times).
+const PHASE_COLORS = [[0xff2ad0, 0xb04cff], [0x2ad8ff, 0x3a8aff], [0xff2a2a, 0xff3a1a]];
+let legendDone = null;
+function eternusRecolor(u, phase) {
+  const [eye, crack] = PHASE_COLORS[phase];
+  for (const m of u.mats) {
+    if (!m.emissive) continue;
+    if (m.name === 'eternusEye') { m.baseEm = new THREE.Color(eye).multiplyScalar(2.2); m.color.setHex(eye).lerp(tmpC.setRGB(1, 1, 1), 0.25); }
+    else if (m.userData.crack) m.baseEm = new THREE.Color(crack).multiplyScalar(m.userData.crack);
+    else continue;
+    m.emissive.copy(m.baseEm);
+  }
+}
+function setBossElement(u, key) {
+  u.element = key;
+  if (!key) { if (u.elemRing) u.elemRing.visible = false; return; }
+  const col = new THREE.Color(ELEMENTS[key].color);
+  if (!u.elemRing) {
+    u.elemRing = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending }));
+    u.elemRing.position.y = 0.05; u.elemRing.renderOrder = 3;
+    u.elemRing.scale.setScalar(u.radius * 2.4 + 0.6);
+    u.group.add(u.elemRing);
+    u.fxTimer = 0;
+  }
+  u.elemRing.visible = true;
+  u.elemRing.material.color.copy(col).multiplyScalar(1.6);
+  u.elemColor = col.clone().multiplyScalar(1.8);
+  floatText(u.group.position.clone().setY(u.height + 0.8), ELEMENTS[key].name + '!', key === 'fire' ? 'burn' : key === 'poison' ? 'poison' : 'crit');
+}
+function eternusTick(u, dt) {
+  if (u.phase === undefined) { u.phase = 0; u.elemT = 0; u.elemI = Math.floor(Math.random() * ELEMENT_KEYS.length); u.devourT = 5; u.devoured = 0; setBossElement(u, ELEMENT_KEYS[u.elemI]); }
+  const r = u.hp / u.maxHp;
+  if (u.phase === 0) {
+    u.elemT += dt;
+    if (u.elemT >= 8) { u.elemT = 0; u.elemI = (u.elemI + 1) % ELEMENT_KEYS.length; setBossElement(u, ELEMENT_KEYS[u.elemI]); }
+    if (r < 0.66) eternusPhase(u, 1);
+  } else if (u.phase === 1) {
+    if (r < 0.33) eternusPhase(u, 2);
+  } else if (u.devoured < 3) {
+    u.devourT -= dt;
+    if (u.devourT <= 0) { u.devourT = 10; devour(u); }
+  }
+  if (u.shieldMesh) {
+    u.shieldMesh.rotation.y += dt * 0.7;
+    u.shieldMesh.material.opacity = 0.2 + Math.sin(elapsed * 5) * 0.06;
+  }
+}
+function eternusPhase(u, p) {
+  u.phase = p;
+  eternusRecolor(u, p);
+  showBanner(p === 1 ? 'THE SUMMONER!' : 'THE DEVOURER!', 'red');
+  shake = Math.max(shake, 0.9);
+  slowMo(0.5);
+  audio.play('slam', { volume: 1 });
+  groundRing(u.group.position, p === 1 ? C.blue : C.red, 7, 0.7);
+  burst(u.group.position.clone().setY(u.height * 0.6), p === 1 ? C.blue : C.red, 40, 6, 0.6, 0.8, 2);
+  if (p === 1) {
+    setBossElement(u, null);
+    // Void shield
+    u.shield = u.maxHp * 0.2;
+    u.shieldMax = u.shield;
+    const m = new THREE.Mesh(new THREE.IcosahedronGeometry(u.height * 0.62, 2), new THREE.MeshStandardMaterial({ color: 0x6ad8ff, emissive: 0x2a9aff, emissiveIntensity: 1, transparent: true, opacity: 0.22, depthWrite: false, flatShading: true }));
+    m.position.y = u.height * 0.55;
+    m.add(new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ color: 0x9aeaff, wireframe: true, transparent: true, opacity: 0.5, depthWrite: false })));
+    u.shieldMesh = m;
+    u.group.add(m);
+    // 6 shadow minions
+    const guard = currentLevel && currentLevel.units[0];
+    const tier = Math.max(1, (guard ? guard.tier : 6) - 2);
+    for (let i = 0; i < 6; i++) {
+      const a = -Math.PI * 0.85 + (i / 5) * Math.PI * 0.7 + Math.PI / 2;
+      const ranged = i % 3 === 2;
+      createUnit({ team: 'enemy', type: ranged ? 'ranged' : 'melee', tier, row: 0, col: 0, model: ranged ? 'P_Bat_Eye' : 'P_Slime_Shadow', element: 'shadow', minion: true }).then((mn) => {
+        if (state !== 'battle') { removeUnit(mn); return; }
+        mn.group.position.set(clamp(u.group.position.x + Math.cos(a) * 3, -6, 6), 0, u.group.position.z + Math.sin(a) * 2.6);
+        mn.group.rotation.y = 0;
+        mn.hpBar.visible = true; if (mn.badge) mn.badge.visible = false;
+        mn.stats = { ...mn.stats, hp: Math.round(mn.stats.hp * finalScale), dmg: Math.round(mn.stats.dmg * finalScale) }; mn.maxHp = mn.stats.hp;
+        mn.setHp(mn.maxHp); mn.dots = []; mn.slow = 0; mn.stun = 0; mn.cooldown = rand(0.4, 0.9); mn.target = null;
+        popIn(mn, 0.05);
+        smoke(mn.group.position, 8, C.shadow, 1);
+      });
+    }
+  } else {
+    if (u.shieldMesh) breakShield(u, true);
+    setBossElement(u, 'shadow');
+    u.stats.speed *= 1.35;
+    u.stats.interval *= 0.75;
+  }
+}
+function hitShield(attacker, u, dmg) {
+  // Mage spells crack the void shield 4x faster
+  const sd = dmg * (attacker.type === 'mage' ? 4 : 1);
+  u.shield -= sd;
+  u.flash = 0.5;
+  floatText(u.group.position.clone().setY(u.height * 0.9), formatNum(Math.round(sd)), 'shield');
+  burst(u.group.position.clone().setY(u.height * 0.6), C.blue, 4, 3, 0.3, 0.3, 1);
+  if (u.shield <= 0) breakShield(u);
+}
+function breakShield(u, silent = false) {
+  u.shield = 0;
+  if (u.shieldMesh) { u.group.remove(u.shieldMesh); u.shieldMesh.geometry.dispose(); u.shieldMesh.material.dispose(); u.shieldMesh.children[0].material.dispose(); u.shieldMesh = null; }
+  burst(u.group.position.clone().setY(u.height * 0.55), C.blue, 50, 8, 0.6, 0.8, 3);
+  if (!silent) { showBanner('SHIELD BROKEN!', 'gold'); audio.play('crit', { volume: 0.8 }); shake = Math.max(shake, 0.6); }
+}
+function devour(u) {
+  let victim = null;
+  for (const o of units) if (o.alive && o.team === 'player' && (!victim || o.maxHp > victim.maxHp)) victim = o;
+  if (!victim) return;
+  u.devoured++;
+  showBanner('DEVOURED!', 'red');
+  audio.play('slam', { volume: 0.8, rate: 0.8 });
+  const from = victim.group.position.clone();
+  tween(0.7, (k) => {
+    tmp.lerpVectors(from, u.group.position, k).setY(1 + Math.sin(k * Math.PI) * 2);
+    glow.spawn(tmp, tmp2.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)), C.red, 0.5, 0.4, 0);
+  }, () => {
+    if (!victim.alive || state !== 'battle') return;
+    victim.team = 'enemy';
+    victim.devoured = true;
+    victim.hpFill.material.color.setHex(0xff4848);
+    victim.setHp(victim.maxHp * 0.6);
+    victim.target = null; victim.retarget = 0; victim.dots = []; victim.stun = 0;
+    victim.flash = 1;
+    groundRing(victim.group.position, C.red, 2.4, 0.5);
+    floatText(victim.group.position.clone().setY(victim.height + 0.6), 'DEVOURED!', 'enemy');
+  });
+}
+// Victory over Eternus: LEGEND screen with credits, then endless mode
+async function legendFinale() {
+  save.legend = true;
+  persist();
+  platform.happyTime();
+  confetti(); setTimeout(confetti, 600);
+  audio.play('levelup', { volume: 0.9, vary: 0 });
+  const roll = document.querySelector('#legend .roll');
+  roll.style.animation = 'none'; void roll.offsetWidth; roll.style.animation = '';
+  showScreen('legend', true);
+  await new Promise((r) => { legendDone = r; });
+}
+
 function updateBattle(dt) {
   battleTime += dt;
   for (const u of units) {
     if (!u.alive) continue;
+    if (u.final) eternusTick(u, dt);
     if (u.dots.length) { updateDots(u, dt); if (!u.alive) continue; }
     const slowK = u.slow > 0 ? 0.7 : 1;
     if (u.slow > 0) u.slow -= dt;
@@ -1707,12 +1913,12 @@ function updateBattle(dt) {
   const eAlive = units.some((u) => u.alive && u.team === 'enemy');
   if (!eAlive) endBattle(true);
   else if (!pAlive) endBattle(false);
-  else if (battleTime > 90) endBattle(false);
+  else if (battleTime > (currentLevel && currentLevel.final ? 150 : 90)) endBattle(false);
 }
 
 async function endBattle(won) {
   state = 'result';
-  for (const p of projectiles) scene.remove(p.mesh);
+  for (const p of projectiles) dropShot(p);
   projectiles.length = 0;
   if (won) {
     slowMo(0.9);
@@ -1720,7 +1926,8 @@ async function endBattle(won) {
     audio.play('win', { volume: 0.9, vary: 0 });
     for (const u of playerUnits()) if (u.alive) { u.play('win', 0.2); u.hpBar.visible = false; }
     confetti();
-    await wait(2.0);
+    await wait(currentLevel && currentLevel.final ? 3.2 : 2.0);
+    if (currentLevel && currentLevel.final) await legendFinale();
     const coins = winCoins(save.level);
     $('winCoins').textContent = formatNum(coins);
     $('tripleBtn').classList.toggle('hidden', !platform.hasRewarded);
@@ -1742,11 +1949,14 @@ async function endBattle(won) {
       'A ? badge hides how strong that enemy is. Be ready!',
       'Sell weak monsters to make room for bigger merges.',
     ]);
+    if (currentLevel && currentLevel.final) $('loseTip').textContent = pick([
+      'Eternus barely weakens. Break his SHIELD with Mage spells!',
+      'In his last phase he DEVOURS your strongest monster. Have more than one big hitter!',
+      'Kill the Void Knights fast: they guard the King.',
+    ]);
     pendingReward = coins;
-    // One comeback offer per defeat: a bonus monster, or after 2 failed tries a level skip
-    const stuck = save.foe && save.foe.level === save.level && save.foe.losses >= 1;
-    $('bonusBtn').classList.toggle('hidden', !platform.hasRewarded || stuck);
-    $('skipBtn').classList.toggle('hidden', !platform.hasRewarded || !stuck);
+    // One comeback offer per defeat: retry with a bonus monster
+    $('bonusBtn').classList.toggle('hidden', !platform.hasRewarded);
     showScreen('lose', true);
   }
 }
@@ -1767,7 +1977,7 @@ async function restoreArmy(board) {
   updatePower();
 }
 
-async function afterResult(won, coins, skipped = false) {
+async function afterResult(won, coins) {
   showScreen('win', false); showScreen('lose', false);
   save.coins += coins;
   bumpCoins();
@@ -1779,7 +1989,7 @@ async function afterResult(won, coins, skipped = false) {
   if (won) platform.sendScore(prevLevel);
   await restoreArmy(battleBoard);
   // Treasure chest every 5 levels
-  if (won && !skipped && prevLevel % 5 === 0) {
+  if (won && prevLevel % 5 === 0) {
     await chestSequence(prevLevel);
   }
   // Midgame ad between levels. CrazyGames and Playgama pace these themselves, other platforms every 3 fights.
@@ -1947,6 +2157,7 @@ const PROC_NAMES = {
   P_Slime_Green: 'Green Slime', P_Slime_Shadow: 'Shadow Slime', P_Slime_Lava: 'Lava Slime', P_Golem_Sand: 'Sand Golem', P_Golem_Ice: 'Ice Golem',
   P_Golem_Lava: 'Lava Golem', P_Golem_Crystal: 'Crystal Golem', P_Golem_Moss: 'Moss Golem', P_Snowman: 'Snowman Brute', P_Cactus: 'Cactus Brute',
   P_Bat_Eye: 'Eyeball Bat', P_Bat_Frost: 'Frost Bat', P_Bat_Sand: 'Sand Bat', P_Wisp_Fire: 'Fire Wisp', P_Wisp_Crystal: 'Crystal Wisp', P_Pumpkin: 'Pumpkin Ghost',
+  P_VoidKnight: 'Void Knight', P_Eternus: 'Voidlord Eternus',
 };
 function enemyName(model) {
   if (PROC_NAMES[model]) return PROC_NAMES[model];
@@ -1964,6 +2175,10 @@ function bestiaryGroups() {
     list.push({ key: 'boss:' + a.boss.name, model: a.boss.model, name: a.boss.name.split(' ').map((w) => w[0] + w.slice(1).toLowerCase()).join(' '), boss: true });
     return { title: THEMES[i].name, list };
   });
+  if (FINAL) groups.push({ title: THEMES[VOID_THEME].name, list: [
+    { key: GUARD_MODEL, model: GUARD_MODEL, name: 'Void Knight' },
+    { key: 'boss:' + ETERNUS.name, model: ETERNUS.model, name: 'Voidlord Eternus', boss: true },
+  ] });
   const wild = [];
   for (const t of Object.keys(ENEMIES)) for (const type of ['melee', 'ranged']) for (const m of ENEMIES[t][type]) if (!seen.has(m)) { seen.add(m); wild.push({ key: m, model: m, name: enemyName(m) }); }
   groups.push({ title: 'WILD MONSTERS', list: wild });
@@ -2031,10 +2246,12 @@ function setBookTab(tab) {
 
 // Big card for unlocks (Mages, new monster levels)
 let unlockDone = null;
-async function showUnlockCard({ ribbon, model, aura, name, text }) {
+async function showUnlockCard({ ribbon, model, aura, name, text, btn }) {
   const rib = document.querySelector('#newMon .ribbon');
   const old = rib.textContent;
+  const oldBtn = $('newMonBtn').textContent;
   rib.textContent = ribbon;
+  if (btn) $('newMonBtn').textContent = btn;
   $('newMonImg').src = await thumbnail(model, aura);
   $('newMonName').textContent = name;
   $('newMonTier').textContent = text;
@@ -2042,8 +2259,13 @@ async function showUnlockCard({ ribbon, model, aura, name, text }) {
   showScreen('newMon', true);
   await new Promise((r) => { unlockDone = r; });
   rib.textContent = old;
+  $('newMonBtn').textContent = oldBtn;
 }
 async function maybeUnlocks() {
+  if (FINAL && save.level >= HELL_FROM && !save.hellSeen) {
+    save.hellSeen = true; persist();
+    await showUnlockCard({ ribbon: 'WARNING!', model: GUARD_MODEL, name: 'HELL MODE!', text: 'From now on EVERY enemy has an element power, their power is hidden and retries barely help. Survive to level 150 to face the FINAL BOSS!', btn: "I'M READY!" });
+  }
   if (save.level >= MAGE_UNLOCK && !save.mageUnlocked) {
     save.mageUnlocked = true; persist();
     await showUnlockCard({ ribbon: 'NEW CLASS!', model: 'P_Mage_Sprite', name: 'MAGES UNLOCKED!', text: 'Mages heal nearby friends and cast area spells. Keep them in the MIDDLE row, behind your Brawlers!' });
@@ -2098,12 +2320,6 @@ click('bonusBtn', async () => {
   pendingBonus = true;
   afterResult(false, pendingReward);
 });
-click('skipBtn', async () => {
-  const ok = await watchRewarded('skip_level');
-  if (!ok) return;
-  showBanner('LEVEL SKIPPED!', 'gold');
-  afterResult(true, pendingReward, true);
-});
 click('dailyDoubleBtn', async () => {
   const ok = await watchRewarded('double_daily');
   if (!ok) return;
@@ -2118,6 +2334,7 @@ click('chestDoubleBtn', async () => {
   collectChest();
 });
 click('claimBtn', () => afterResult(true, pendingReward));
+click('legendBtn', () => { showScreen('legend', false); if (legendDone) { const d = legendDone; legendDone = null; d(); } });
 click('retryBtn', () => afterResult(false, pendingReward));
 click('tabMine', () => setBookTab('mine'));
 click('tabBest', () => setBookTab('best'));
@@ -2176,7 +2393,7 @@ async function restartLevel() {
   if (state === 'loading-level' || state === 'chest') return;
   const wasBattle = state === 'battle' || state === 'result';
   state = 'loading-level';
-  for (const p of projectiles) scene.remove(p.mesh);
+  for (const p of projectiles) dropShot(p);
   projectiles.length = 0;
   showScreen('win', false); showScreen('lose', false);
   timeScale = 1; slowMoTimer = 0; camZoom = null;
@@ -2189,7 +2406,7 @@ async function restartLevel() {
 async function newGame() {
   if (state === 'loading-level' || state === 'chest') return;
   state = 'loading-level';
-  for (const p of projectiles) scene.remove(p.mesh);
+  for (const p of projectiles) dropShot(p);
   projectiles.length = 0;
   showScreen('win', false); showScreen('lose', false);
   timeScale = 1; slowMoTimer = 0; camZoom = null;
@@ -2368,7 +2585,7 @@ async function boot() {
     }
     tick();
   });
-  const arenaJob = saveJob.then(() => buildArena()).then(() => applyTheme(themeIndex(save.level))).then(tick);
+  const arenaJob = saveJob.then(() => buildArena()).then(() => applyTheme(tIdx(save.level))).then(tick);
   await saveJob;
   // Monsters needed for the first screen
   const firstModels = new Set();
@@ -2477,15 +2694,16 @@ if (platform.name === 'local') {
         const you = armyPower(playerUnits()), foe = armyPower(enemyUnits());
         startBattle();
         let t = 0;
-        while (state === 'battle' && t < 95) { this.sim(0.5); t += 0.5; }
+        while (state === 'battle' && t < 160) { this.sim(0.5); t += 0.5; if (currentLevel && currentLevel.final) await new Promise((r) => setTimeout(r, 0)); }
         const won = enemyUnits().filter((u) => u.alive).length === 0;
         tries++;
         log.push({ L: save.level, won, you, foe, budget: save.foe && save.foe.budget, losses: save.foe && save.foe.losses });
+        if (opts.log) console.log('>> ' + JSON.stringify(log[log.length - 1]));
         await new Promise((r) => setTimeout(r, 0));
         showScreen('win', false); showScreen('lose', false);
         // Same bookkeeping as afterResult (no ads, chest coins added directly)
         const L = save.level;
-        if (won) { save.coins += winCoins(L) + (L % 5 === 0 ? winCoins(L) * 3 : 0); save.level++; }
+        if (won) { save.coins += winCoins(L) + (L % 5 === 0 ? winCoins(L) * 3 : 0); save.level++; if (isFinalLevel(L)) save.legend = true; }
         else { save.coins += Math.max(5, Math.round(winCoins(L) * 0.3)); save.foe.losses++; }
         if (tries > (opts.maxTries || 400)) break;
         state = 'result';
@@ -2494,12 +2712,30 @@ if (platform.name === 'local') {
       }
       return log;
     },
+    async finalTrials(n, board) {
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        for (const u of [...units]) removeUnit(u);
+        await Promise.all(board.map((b) => createUnit({ team: 'player', ...b })));
+        save.board = board; save.foe = null;
+        await this.quickSetup();
+        battleBoard = board;
+        startBattle();
+        let t = 0;
+        while (state === 'battle' && t < 160) { this.sim(0.5); t += 0.5; await new Promise((r) => setTimeout(r, 0)); }
+        const boss = units.find((u) => u.final);
+        out.push({ won: enemyUnits().filter((u) => u.alive).length === 0, t, phase: boss ? boss.phase : -1, bossHp: boss ? Math.round(100 * boss.hp / boss.maxHp) : 0, devoured: boss ? boss.devoured : 0, budget: save.foe && save.foe.budget });
+        showScreen('win', false); showScreen('lose', false);
+      }
+      return out;
+    },
     async quickSetup() {
       for (const u of enemyUnits()) removeUnit(u);
       const L = currentArmy();
       currentLevel = L;
-      await Promise.all(L.units.map((e) => createUnit({ team: 'enemy', type: e.type, tier: e.tier, row: e.row, col: e.col, seed: e.seed, model: e.model, element: e.element, hidden: e.hidden })));
-      if (L.boss) await createUnit({ team: 'enemy', type: 'melee', tier: 1, row: 1, col: 2, isBoss: true, model: L.boss.model, flying: L.boss.flying, budget: L.boss.budget, element: L.boss.element });
+      await Promise.all(L.units.map((e) => createUnit({ team: 'enemy', ...e })));
+      if (L.final) { preloadFinal(); await loadModel(monsterPath('P_Slime_Shadow')); await loadModel(monsterPath('P_Bat_Eye')); }
+      if (L.boss) await createUnit(bossOpts(L.boss)).then((b) => { b.bossName = L.boss.name; });
       state = 'prep';
     },
     step(dt) { forcedDt = dt; frame(); forcedDt = null; },
@@ -2514,7 +2750,7 @@ if (platform.name === 'local') {
       if (!opts.deferLevel) await setupLevel();
       $('hint').classList.add('hidden');
     },
-    setupLevel: () => setupLevel(),
+    setupLevel: () => setupLevel(), legendFinale: () => legendFinale(), get currentLevel() { return currentLevel; },
     demoMerge(type, tier) {
       const list = playerUnits().filter((u) => u.alive && u.type === type && u.tier === tier);
       const [a, b] = list;

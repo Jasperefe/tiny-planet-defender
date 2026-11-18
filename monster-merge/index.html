@@ -7,7 +7,7 @@
 <title>Monster Merge Arena</title>
 <script>window.PLATFORM = "local";</script>
 <script>window.PLATFORM = window.PLATFORM || 'local';</script>
-<link rel="stylesheet" href="css/style.css?v=20261118084653">
+<link rel="stylesheet" href="css/style.css?v=20261118124608">
 </head>
 <body>
 <canvas id="game"></canvas>
@@ -27,7 +27,7 @@
     <button id="signInBtn" class="signin-btn hidden" aria-label="Sign in"><i data-ico="user"></i><span>SIGN IN</span></button>
   </div>
   <div class="level-box">
-    <div class="level-title">LEVEL <span id="levelNum">1</span></div>
+    <div class="level-title"><i id="legendTag" class="legend-tag hidden" data-ico="star" title="LEGEND"></i>LEVEL <span id="levelNum">1</span></div>
     <div id="road" class="road"></div>
   </div>
   <div class="top-right">
@@ -81,6 +81,28 @@
   </div>
 </div>
 
+<!-- Final boss defeated -->
+<div id="legend" class="screen">
+  <div class="panel legend">
+    <div class="ribbon gold">LEGEND!</div>
+    <div class="legend-star"><i data-ico="star"></i></div>
+    <h2 class="legend-title">YOU DEFEATED<b>VOIDLORD ETERNUS</b></h2>
+    <p class="legend-text">The Last Monarch has fallen. You are a <b>LEGEND</b> of the Monster Merge Arena!</p>
+    <div class="credits"><div class="roll">
+      <b>MONSTER MERGE ARENA</b>
+      <span>Game by</span><em>Esire Omoefe</em>
+      <span>3D monsters &amp; props</span><em>Quaternius</em>
+      <span>Sound effects</span><em>Kenney</em>
+      <span>Music</span><em>HydroGene &amp; iamoneabe</em>
+      <span>3D engine</span><em>three.js</em>
+      <span>Final boss</span><em>Voidlord Eternus</em>
+      <b>THANKS FOR PLAYING!</b>
+      <span>The arena never ends...</span>
+    </div></div>
+    <button id="legendBtn" class="btn green">CONTINUE: ENDLESS MODE</button>
+  </div>
+</div>
+
 <!-- Defeat -->
 <div id="lose" class="screen">
   <div class="panel">
@@ -88,7 +110,6 @@
     <p class="lose-tip" id="loseTip">Merge more monsters to get stronger!</p>
     <div class="reward"><span class="coin-icon big"></span><span id="loseCoins">0</span></div>
     <button id="bonusBtn" class="btn green hidden"><span class="ad-tag">AD</span> RETRY + BONUS MONSTER</button>
-    <button id="skipBtn" class="btn green hidden"><span class="ad-tag">AD</span> SKIP THIS LEVEL</button>
     <button id="retryBtn" class="btn blue">TRY AGAIN</button>
   </div>
 </div>
@@ -214,6 +235,6 @@
 <script type="importmap">
 { "imports": { "three": "./lib/three/three.module.js", "three/addons/": "./lib/three/addons/" } }
 </script>
-<script type="module" src="js/main.js?v=20261118084653"></script>
+<script type="module" src="js/main.js?v=20261118124608"></script>
 </body>
 </html>

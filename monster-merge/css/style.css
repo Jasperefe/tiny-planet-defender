@@ -420,3 +420,44 @@ i[data-ico] { font-style: normal; display: inline-flex; }
   .g-nav .btn { padding-top: 6px; padding-bottom: 6px; }
   .unlock-card .g-art img, .panel.unlock .g-art img { width: 70px; height: 70px; }
 }
+
+/* ---------- Final boss mode ---------- */
+.dmg.shield { color: #7ae8ff; font-size: 18px; }
+.road i.boss.final { width: 22px; height: 22px; background: radial-gradient(circle, #ff6ad8, #6a1a9a); box-shadow: 0 0 10px #ff4af0; }
+.short-land .road i.boss.final { width: 18px; height: 18px; }
+.boss-name.final { color: #ff9af4; text-shadow: 0 3px 0 #3a0a4a, 0 0 22px #c35cff; font-size: clamp(26px, 7.4vw, 50px); text-align: center; animation-duration: 3.4s; }
+.boss-name.final small { display: block; font-size: .42em; letter-spacing: 6px; color: #ffd84a; }
+.legend-tag { display: inline-flex; vertical-align: -3px; margin-right: 6px; color: #ffd84a; filter: drop-shadow(0 0 6px #ffb020); }
+.legend-tag .ico { width: 20px; height: 20px; }
+.panel.legend { width: min(440px, 100%); background: linear-gradient(#2a1050, #140630); color: #fff; border-color: #ffd84a; box-shadow: 0 0 40px rgba(195, 92, 255, .6), 0 10px 0 rgba(0,0,0,.3); }
+.legend-star { width: 70px; height: 70px; margin: 0 auto; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(circle, #fff3a0 20%, #ffb020 70%); box-shadow: 0 0 30px #ffb020; color: #fff; animation: pulse2 1.2s ease-in-out infinite; }
+.legend-star .ico { width: 40px; height: 40px; }
+.legend-title { margin: 0; font-size: 18px; letter-spacing: 1px; color: #e8d0ff; }
+.legend-title b { display: block; font-size: clamp(24px, 7vw, 32px); color: #ff9af4; text-shadow: 0 3px 0 #3a0a4a, 0 0 18px #c35cff; }
+.legend-text { margin: 0; font-size: 15px; font-weight: 800; color: #f0e6ff; }
+.legend-text b { color: #ffd84a; }
+.credits { height: 132px; overflow: hidden; position: relative; border-radius: 14px; background: rgba(0,0,0,.25);
+  -webkit-mask-image: linear-gradient(transparent, #000 22%, #000 78%, transparent); mask-image: linear-gradient(transparent, #000 22%, #000 78%, transparent); }
+.roll { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 0 10px; animation: creditsRoll 16s linear infinite; }
+.roll b { font-size: 18px; color: #ffd84a; margin: 10px 0 6px; }
+.roll span { font-size: 12px; color: #c8b0f0; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; }
+.roll em { font-style: normal; font-size: 17px; font-weight: 900; color: #fff; margin-bottom: 8px; }
+@keyframes creditsRoll { from { transform: translateY(132px); } to { transform: translateY(-100%); } }
+@media (max-height: 460px) and (orientation: landscape) {
+  .panel.legend { width: min(620px, 94vw); display: grid; grid-template-columns: 1fr 1fr; grid-template-areas: "title credits" "text credits" "btn btn"; gap: 6px 14px; align-items: center; padding-top: 30px; }
+  .panel.legend .legend-star { display: none; }
+  .panel.legend .legend-title { grid-area: title; }
+  .panel.legend .legend-text { grid-area: text; }
+  .panel.legend .credits { grid-area: credits; height: 150px; }
+  .panel.legend #legendBtn { grid-area: btn; }
+  .legend-title b { font-size: 22px; }
+}
+/* Short landscape phones: unlock / new monster card side by side so the button stays on screen */
+@media (max-height: 460px) and (orientation: landscape) {
+  .panel.new-mon { width: min(600px, 92vw); display: grid; grid-template-columns: 150px 1fr; grid-template-areas: "img name" "img tier" "img btn"; gap: 4px 16px; align-items: center; padding-top: 30px; }
+  .new-mon img { grid-area: img; width: 150px; height: 150px; }
+  .new-mon .new-name { grid-area: name; }
+  .new-mon .new-tier { grid-area: tier; font-size: 14px; }
+  .new-mon #newMonBtn { grid-area: btn; }
+}

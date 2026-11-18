@@ -17,9 +17,29 @@ export const hooks = {
 };
 
 // ---------------------------------------------------------------- Local (testing / own website)
+const TEST_LEVEL = Math.max(0, Math.min(300, parseInt(new URLSearchParams(location.search).get('test') || '0', 10) || 0));
+function testSave(level) {
+  const cap = level >= 120 ? 15 : level >= 100 ? 14 : level >= 80 ? 13 : level >= 60 ? 12 : level >= 40 ? 11 : 10;
+  const t = (d) => Math.max(1, Math.min(cap, Math.round(Math.min(cap, 3 + level / 8)) - d));
+  const board = [];
+  [0, 0, 1, 0, 0].forEach((d, col) => board.push({ type: 'melee', tier: t(d), row: 0, col }));
+  board.push({ type: 'melee', tier: t(1), row: 1, col: 2 });
+  if (level >= 10) { board.push({ type: 'mage', tier: t(1), row: 1, col: 1 }); board.push({ type: 'mage', tier: t(1), row: 1, col: 3 }); }
+  [1, 0, 0, 0, 1].forEach((d, col) => board.push({ type: 'ranged', tier: t(d), row: 2, col }));
+  const tierSeen = {}; for (let i = 11; i <= cap; i++) tierSeen[i] = 1;
+  const d = new Date();
+  return {
+    level, coins: 200 + level * 40, buys: { melee: 20, ranged: 15, mage: level >= 10 ? 8 : 0 }, board,
+    discovered: { melee: t(0), ranged: t(0), mage: level >= 10 ? t(1) : 0 }, defeated: {}, mageUnlocked: level >= 10, tierSeen,
+    guideSeen: true, elemSeen: {}, hellSeen: false, legend: false, foe: null,
+    lastDaily: `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`, testFrom: level,
+  };
+}
 const local = {
   name: 'local',
   hasRewarded: true,
+  // Final boss mode: on in the web test build (the Playgama build has it too; CrazyGames/YouTube/Playhop do not)
+  finalBoss: true,
   async init() {},
   firstFrameReady() {},
   gameReady() {},
@@ -27,10 +47,15 @@ const local = {
   gameplayStop() {},
   happyTime() {},
   async loadData() {
+    // Test jump: ?test=150 starts at that level with a strong army, on a separate test save
+    if (TEST_LEVEL) {
+      try { const t = JSON.parse(localStorage.getItem(SAVE_KEY + '_test') || 'null'); if (t && t.testFrom === TEST_LEVEL) return t; } catch { /* ignore */ }
+      return testSave(TEST_LEVEL);
+    }
     try { return JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch { return null; }
   },
   saveData(obj) {
-    try { localStorage.setItem(SAVE_KEY, JSON.stringify(obj)); } catch { /* storage blocked */ }
+    try { localStorage.setItem(TEST_LEVEL ? SAVE_KEY + '_test' : SAVE_KEY, JSON.stringify(TEST_LEVEL ? { ...obj, testFrom: TEST_LEVEL } : obj)); } catch { /* storage blocked */ }
   },
   async rewardedAd() {
     // Simulated ad for testing: always grants the reward.
@@ -249,6 +274,7 @@ const playhop = {
 const playgama = {
   name: 'playgama',
   hasRewarded: true,
+  finalBoss: true, // hell mode from level 100 and Voidlord Eternus at level 150
   adCapped: true, // Bridge enforces the minimum delay between interstitials itself
   bridge: null,
   playing: false,
