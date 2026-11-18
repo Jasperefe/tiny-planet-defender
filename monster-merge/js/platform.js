@@ -17,7 +17,9 @@ export const hooks = {
 };
 
 // ---------------------------------------------------------------- Local (testing / own website)
-const TEST_LEVEL = Math.max(0, Math.min(300, parseInt(new URLSearchParams(location.search).get('test') || '0', 10) || 0));
+// Level jumps (?test=N) only work on the private test copy and on a local dev server, never on the public link
+const TEST_COPY = location.pathname.includes('/monster-merge-test/') || /^(localhost|127\.)/.test(location.hostname);
+const TEST_LEVEL = TEST_COPY ? Math.max(0, Math.min(300, parseInt(new URLSearchParams(location.search).get('test') || '0', 10) || 0)) : 0;
 function testSave(level) {
   const cap = level >= 120 ? 15 : level >= 100 ? 14 : level >= 80 ? 13 : level >= 60 ? 12 : level >= 40 ? 11 : 10;
   const t = (d) => Math.max(1, Math.min(cap, Math.round(Math.min(cap, 3 + level / 8)) - d));

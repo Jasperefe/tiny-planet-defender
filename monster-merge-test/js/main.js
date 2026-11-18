@@ -5,18 +5,18 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { platform, hooks, detectLanguage } from './platform.js?v=20261118133001';
-import { AudioManager } from './audio.js?v=20261118133001';
+import { platform, hooks, detectLanguage } from './platform.js?v=20261118135640';
+import { AudioManager } from './audio.js?v=20261118135640';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
   buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
   ELEMENTS, ARENAS, arenaIndex, arenaTwist, unitValue, coinUnits, enemyBudget, mercy,
   LINE_KEYS, MAGE_UNLOCK, TIER_TITLES, TIER_ACCESSORY, TIER_UNLOCK, tierCap, ENEMIES, BOSSES,
   ELEMENT_KEYS, HELL_FROM, FINAL_LEVEL, GUARD_MODEL, ETERNUS, FINAL_RATIO,
-} from './data.js?v=20261118133001';
-import { isProc, procFlying, procBig, buildCreature, PROC } from './creatures.js?v=20261118133001';
-import { icon, applyIcons } from './icons.js?v=20261118133001';
-import { THEMES, themeIndex, VOID_THEME, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261118133001';
+} from './data.js?v=20261118135640';
+import { isProc, procFlying, procBig, buildCreature, PROC } from './creatures.js?v=20261118135640';
+import { icon, applyIcons } from './icons.js?v=20261118135640';
+import { THEMES, themeIndex, VOID_THEME, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261118135640';
 
 // ============================================================ Helpers
 const $ = (id) => document.getElementById(id);
