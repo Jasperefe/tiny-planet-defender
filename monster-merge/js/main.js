@@ -5,18 +5,18 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { platform, hooks, detectLanguage } from './platform.js?v=20261118135640';
-import { AudioManager } from './audio.js?v=20261118135640';
+import { platform, hooks, detectLanguage } from './platform.js?v=20261120092137';
+import { AudioManager } from './audio.js?v=20261120092137';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
   buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
   ELEMENTS, ARENAS, arenaIndex, arenaTwist, unitValue, coinUnits, enemyBudget, mercy,
   LINE_KEYS, MAGE_UNLOCK, TIER_TITLES, TIER_ACCESSORY, TIER_UNLOCK, tierCap, ENEMIES, BOSSES,
   ELEMENT_KEYS, HELL_FROM, FINAL_LEVEL, GUARD_MODEL, ETERNUS, FINAL_RATIO,
-} from './data.js?v=20261118135640';
-import { isProc, procFlying, procBig, buildCreature, PROC } from './creatures.js?v=20261118135640';
-import { icon, applyIcons } from './icons.js?v=20261118135640';
-import { THEMES, themeIndex, VOID_THEME, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261118135640';
+} from './data.js?v=20261120092137';
+import { isProc, procFlying, procBig, buildCreature, PROC } from './creatures.js?v=20261120092137';
+import { icon, applyIcons } from './icons.js?v=20261120092137';
+import { THEMES, themeIndex, VOID_THEME, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261120092137';
 
 // ============================================================ Helpers
 const $ = (id) => document.getElementById(id);
@@ -88,7 +88,9 @@ const save = {
   hellSeen: false, legend: false, // final boss mode (Playgama)
 };
 let state = 'loading'; // loading | prep | battle | result | chest
-let paused = false;
+let paused = false; // Settings menu open
+let sysPaused = false; // paused by the platform (Playgama/YouTube pause events)
+let adSince = 0;
 let adActive = false;
 let timeScale = 1;
 let slowMoTimer = 0;
@@ -2426,14 +2428,17 @@ function setPaused(p) {
   paused = p;
   syncGameplay();
 }
-hooks.onAdStart = () => { adActive = true; audio.setBlocked(true); };
-hooks.onAdEnd = () => { adActive = false; audio.setBlocked(!platform.isAudioEnabled()); };
-hooks.onPause = () => { paused = true; audio.setPaused(true); syncGameplay(); };
-hooks.onResume = () => { paused = false; audio.setPaused(false); syncGameplay(); };
+hooks.onAdStart = () => { adActive = true; adSince = performance.now(); audio.setBlocked(true); };
+// An ad that ended always resumes the game (some phones never send the platform's "resume" after an ad)
+hooks.onAdEnd = () => { adActive = false; sysPaused = false; audio.setBlocked(!platform.isAudioEnabled()); audio.setPaused(document.hidden); syncGameplay(); };
+hooks.onPause = () => { sysPaused = true; audio.setPaused(true); syncGameplay(); };
+hooks.onResume = () => { sysPaused = false; audio.setPaused(false); syncGameplay(); };
+// Anti-freeze: if the player touches the game while it is stuck paused (no ad showing), carry on
+window.addEventListener('pointerdown', () => { if (sysPaused && !adActive && !document.hidden) hooks.onResume(); }, true);
 hooks.onAudioChange = (on) => audio.setBlocked(!on || adActive);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) audio.setPaused(true);
-  else if (!adActive && !paused) audio.setPaused(false);
+  else if (!adActive && !paused && !sysPaused) audio.setPaused(false);
   syncGameplay();
 });
 window.addEventListener('blur', () => audio.setPaused(true));
@@ -2446,7 +2451,7 @@ window.addEventListener('contextmenu', (e) => e.preventDefault());
 let gameplayOn = false;
 function syncGameplay() {
   const menuOpen = !!document.querySelector('.screen.show');
-  const on = (state === 'prep' || state === 'battle') && !paused && !adActive && !document.hidden && !menuOpen;
+  const on = (state === 'prep' || state === 'battle') && !paused && !sysPaused && !adActive && !document.hidden && !menuOpen;
   if (on === gameplayOn) return;
   gameplayOn = on;
   if (on) platform.gameplayStart(); else platform.gameplayStop();
@@ -2466,7 +2471,9 @@ function frame() {
   const raw = forcedDt !== null ? forcedDt : Math.min((now - last) / 1000, 0.05);
   last = now;
   syncGameplay();
-  if (paused || adActive) { renderer.render(scene, camera); return; }
+  // Anti-freeze: an ad that never reports "closed" can't hold the game forever
+  if (adActive && performance.now() - adSince > 90000) hooks.onAdEnd();
+  if (paused || sysPaused || adActive) { renderer.render(scene, camera); return; }
   if (slowMoTimer > 0) { slowMoTimer -= raw; if (slowMoTimer <= 0) timeScale = 1; }
   const dt = raw * timeScale;
   elapsed += raw;

@@ -345,19 +345,24 @@ const playgama = {
   showAd(kind, placement) {
     return new Promise((resolve) => {
       if (!this.bridge) { resolve(false); return; }
-      let opened = false, rewarded = false, done = false;
+      let opened = false, rewarded = false, done = false, heard = false;
       const finish = (v) => { if (done) return; done = true; this.pending = null; if (opened) hooks.onAdEnd(); resolve(v); };
       this.pending = {
         kind,
         on: (st) => {
+          heard = true;
           if (st === 'opened' && !opened) { opened = true; hooks.onAdStart(); }
           else if (st === 'rewarded') rewarded = true;
           else if (st === 'closed') finish(kind === 'r' ? rewarded : true);
           else if (st === 'failed') finish(false);
         },
       };
-      // Safety net if the platform never answers
-      setTimeout(() => { if (!opened) finish(false); }, 12000);
+      // Anti-freeze: when the Bridge skips an interstitial (too soon after the last one) it may send
+      // no event at all, so don't wait: carry on after 1.5 s of silence. An ad that started loading
+      // gets up to 10 s to open, and an open ad up to 75 s (interstitial) / 120 s (rewarded) to close.
+      setTimeout(() => { if (!heard) finish(false); }, kind === 'i' ? 1500 : 4000);
+      setTimeout(() => { if (!opened) finish(false); }, 10000);
+      setTimeout(() => finish(kind === 'r' ? rewarded : true), kind === 'i' ? 75000 : 120000);
       try {
         if (kind === 'r') this.bridge.advertisement.showRewarded(placement);
         else this.bridge.advertisement.showInterstitial(placement);
