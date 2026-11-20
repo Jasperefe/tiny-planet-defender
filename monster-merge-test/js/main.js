@@ -5,18 +5,18 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { platform, hooks, detectLanguage } from './platform.js?v=20261120092137';
-import { AudioManager } from './audio.js?v=20261120092137';
+import { platform, hooks, detectLanguage } from './platform.js?v=20261120160426';
+import { AudioManager } from './audio.js?v=20261120160426';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
   buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
   ELEMENTS, ARENAS, arenaIndex, arenaTwist, unitValue, coinUnits, enemyBudget, mercy,
   LINE_KEYS, MAGE_UNLOCK, TIER_TITLES, TIER_ACCESSORY, TIER_UNLOCK, tierCap, ENEMIES, BOSSES,
   ELEMENT_KEYS, HELL_FROM, FINAL_LEVEL, GUARD_MODEL, ETERNUS, FINAL_RATIO,
-} from './data.js?v=20261120092137';
-import { isProc, procFlying, procBig, buildCreature, PROC } from './creatures.js?v=20261120092137';
-import { icon, applyIcons } from './icons.js?v=20261120092137';
-import { THEMES, themeIndex, VOID_THEME, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261120092137';
+} from './data.js?v=20261120160426';
+import { isProc, procFlying, procBig, buildCreature, PROC } from './creatures.js?v=20261120160426';
+import { icon, applyIcons } from './icons.js?v=20261120160426';
+import { THEMES, themeIndex, VOID_THEME, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261120160426';
 
 // ============================================================ Helpers
 const $ = (id) => document.getElementById(id);
@@ -424,6 +424,7 @@ async function buildDecor(theme) {
   floatProps.length = 0;
   await Promise.all(theme.decor.map(async ([name, h, x, z, rot, noShadow]) => {
     const o = isProp(name) ? buildProp(name, h) : await envObject(name, h, { noShadow: !!noShadow });
+    if (THEMES[themeNow] !== theme) return; // the arena changed while this was loading
     o.position.x = x; o.position.z = z;
     o.rotation.y = rot === undefined ? rand(0, TAU) : rot;
     if (o.userData.float) { o.position.y = rand(3, 8); floatProps.push({ obj: o, base: o.position.y, bob: rand(0, TAU) }); }
@@ -449,8 +450,9 @@ async function applyTheme(i) {
   if (th.moon) moon.children[1].material.color.setHex(th.moon);
   lavaSea.visible = !!th.lavaSea;
   for (const m of cloudMats) m.color.setHex(th.cloud);
+  recolor(arena, th); recolor(envRoot, th);
   await buildDecor(th);
-  recolor(arena, th); recolor(envRoot, th); recolor(decorGroup, th);
+  if (themeNow === i) recolor(decorGroup, th);
 }
 
 // Soft rounded-square texture for cell markers
@@ -2591,7 +2593,9 @@ async function boot() {
     }
     tick();
   });
-  const arenaJob = saveJob.then(() => buildArena()).then(() => applyTheme(tIdx(save.level))).then(tick);
+  // Faster start: the board shows as soon as the arena and first monsters are ready;
+  // trees, props and sound effects keep loading in the background
+  const arenaJob = saveJob.then(() => buildArena()).then(() => { applyTheme(tIdx(save.level)).catch(() => {}); }).then(tick);
   await saveJob;
   // Monsters needed for the first screen
   const firstModels = new Set();
@@ -2600,7 +2604,9 @@ async function boot() {
   for (const e of L.units) firstModels.add(e.model);
   if (L.boss) firstModels.add(L.boss.model);
   const modelJobs = [...firstModels].map((m) => loadModel(monsterPath(m)).then(tick));
-  await Promise.all([arenaJob, sfxJob, ...modelJobs]);
+  sfxJob.catch(() => {});
+  await Promise.all([arenaJob, ...modelJobs]);
+  tick();
 
   // Place the saved army
   await Promise.all(save.board.map((b) => createUnit({ team: 'player', ...b })));

@@ -370,7 +370,16 @@ const playgama = {
     });
   },
   rewardedAd(id = 'reward') { return this.showAd('r', id); },
-  async midgameAd() { await this.showAd('i', 'level_break'); },
+  // Forced ads: at most one every 2.5 minutes and none in the first 2 minutes (kept here too, in case the
+  // Bridge config is not applied). Rewarded ads are optional and not limited.
+  bootAt: Date.now(),
+  lastInterstitial: 0,
+  async midgameAd() {
+    const now = Date.now();
+    if (now - this.bootAt < 120000 || now - this.lastInterstitial < 150000) return;
+    this.lastInterstitial = now;
+    await this.showAd('i', 'level_break');
+  },
   sendScore(level) { try { this.bridge && this.bridge.platform.sendMessage('level_completed', { level }); } catch {} },
   isAudioEnabled() { try { return this.bridge ? this.bridge.platform.isAudioEnabled !== false : true; } catch { return true; } },
   waitForSdk: true, // nothing loads before the Bridge is ready
@@ -385,7 +394,65 @@ const playgama = {
   },
 };
 
-const all = { local, crazygames, youtube, playhop, playgama };
+// ---------------------------------------------------------------- GamePix (SDK v3, manual lifecycle)
+const gamepix = {
+  name: 'gamepix',
+  hasRewarded: true,
+  finalBoss: true, // hell mode from level 100 and Voidlord Eternus at level 150 (same as Playgama)
+  g: null,
+  lastP: 0,
+  ready: false,
+  started: false,
+  lang: 'en',
+  async init() {
+    const g = window.GamePix;
+    if (!g) return;
+    this.g = g;
+    // Required handlers; they may fire more than once (our handlers are idempotent)
+    try { g.events.on('pause', () => hooks.onPause()); g.events.on('resume', () => hooks.onResume()); } catch {}
+    try { g.events.on('soundOff', () => hooks.onAudioChange(false)); g.events.on('soundOn', () => hooks.onAudioChange(true)); } catch {}
+    try { this.lang = (g.lang() || 'en').slice(0, 2); } catch {}
+  },
+  loadingProgress(p) {
+    const v = Math.max(this.lastP, Math.min(100, Math.round(p)));
+    this.lastP = v;
+    try { this.g && this.g.lifecycle.loading(v); } catch {}
+  },
+  firstFrameReady() {},
+  async gameReady() {
+    if (!this.g || this.ready) return;
+    this.loadingProgress(100);
+    try { await withTimeout(this.g.lifecycle.loaded(), 8000, null); } catch {}
+    this.ready = true;
+  },
+  gameplayStart() {
+    if (this.started || !this.g) return;
+    this.started = true;
+    try { this.g.lifecycle.gameStart(); } catch {}
+  },
+  gameplayStop() {},
+  happyTime() { try { this.ready && this.g.happyMoment('level_won'); } catch {} },
+  // GamePix syncs localStorage itself (read known keys only)
+  async loadData() { try { return JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch { return null; } },
+  saveData(obj) { try { localStorage.setItem(SAVE_KEY, JSON.stringify(obj)); } catch {} },
+  async showAd(kind) {
+    if (!this.g) return false;
+    hooks.onAdStart();
+    let r = null;
+    try {
+      const call = kind === 'r' ? this.g.ads.reward() : this.g.ads.interstitial();
+      r = await withTimeout(call, kind === 'r' ? 120000 : 75000, { success: false });
+    } catch { r = { success: false }; }
+    hooks.onAdEnd();
+    return !!(r && r.success);
+  },
+  rewardedAd() { return this.showAd('r'); },
+  async midgameAd() { await this.showAd('i'); },
+  sendScore() {},
+  isAudioEnabled() { return true; },
+};
+
+const all = { local, crazygames, youtube, playhop, playgama, gamepix };
 export const platform = all[window.PLATFORM] || local;
 export function detectLanguage() {
   if (platform.lang) return platform.lang;
