@@ -5,18 +5,18 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { platform, hooks, detectLanguage } from './platform.js?v=20261120160426';
-import { AudioManager } from './audio.js?v=20261120160426';
+import { platform, hooks, detectLanguage } from './platform.js?v=20261120164532';
+import { AudioManager } from './audio.js?v=20261120164532';
 import {
   LINES, MAX_TIER, AURA_COLORS, tierInfo, enemyModel, unitStats, unitHeight,
   buyPrice, winCoins, START_COINS, buildLevel, bossStats, expected, sellValue,
   ELEMENTS, ARENAS, arenaIndex, arenaTwist, unitValue, coinUnits, enemyBudget, mercy,
   LINE_KEYS, MAGE_UNLOCK, TIER_TITLES, TIER_ACCESSORY, TIER_UNLOCK, tierCap, ENEMIES, BOSSES,
   ELEMENT_KEYS, HELL_FROM, FINAL_LEVEL, GUARD_MODEL, ETERNUS, FINAL_RATIO,
-} from './data.js?v=20261120160426';
-import { isProc, procFlying, procBig, buildCreature, PROC } from './creatures.js?v=20261120160426';
-import { icon, applyIcons } from './icons.js?v=20261120160426';
-import { THEMES, themeIndex, VOID_THEME, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261120160426';
+} from './data.js?v=20261120164532';
+import { isProc, procFlying, procBig, buildCreature, PROC } from './creatures.js?v=20261120164532';
+import { icon, applyIcons } from './icons.js?v=20261120164532';
+import { THEMES, themeIndex, VOID_THEME, isProp, buildProp, ambientParticles, animatedUniforms, lavaMaterial, glowTexture } from './themes.js?v=20261120164532';
 
 // ============================================================ Helpers
 const $ = (id) => document.getElementById(id);
@@ -2010,8 +2010,14 @@ async function afterResult(won, coins) {
 let lastRewardedAt = -1e9;
 let pendingBonus = false;
 // Every rewarded ad goes through here so we know when the last one played
+let rewardBusy = false;
 async function watchRewarded(id) {
-  const ok = await platform.rewardedAd(id);
+  // A second tap while an ad is already loading is ignored (no double ads, no double rewards)
+  if (rewardBusy) return false;
+  rewardBusy = true;
+  let ok = false;
+  try { ok = await platform.rewardedAd(id); } catch { ok = false; }
+  rewardBusy = false;
   if (ok) lastRewardedAt = performance.now();
   else showBanner('NO AD RIGHT NOW', 'red');
   return ok;
@@ -2088,6 +2094,8 @@ async function tapChest() {
 }
 
 async function collectChest() {
+  if (!chest || !chest.reward || chest.collected) return; // never twice, never without a chest
+  chest.collected = true;
   showScreen('chestWin', false);
   const r = chest.reward;
   save.coins += r.coins;
